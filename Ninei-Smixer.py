@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import filedialog
 from tkinter import ttk
 
+#definizione funzioni
+
 def mix_files():
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
     prompt_string = entry_prompt.get("1.0", tk.END).strip()
