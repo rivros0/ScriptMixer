@@ -174,14 +174,7 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
         return f"Errore durante il mix per {subdir}: {str(e)}\n"
 
 def choose_directory():
-    '''
-    global local_copy_directory
-    if 'local_copy_directory' in globals() and local_copy_directory:
-        lbl_directory.config(text=f"Directory selezionata: {local_copy_directory}")
-        update_directory_listing(local_copy_directory)
-        update_subdirectories_list(local_copy_directory)
-    else:
-    '''
+
     selected_directory = filedialog.askdirectory()
     if selected_directory:
         lbl_directory.config(text=f"Directory selezionata: {selected_directory}")
