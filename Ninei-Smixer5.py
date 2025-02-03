@@ -1,13 +1,107 @@
 import os
+import shutil
 import tkinter as tk
 from tkinter import filedialog, Toplevel, Text, Scrollbar
 from tkinter import ttk, messagebox
+from datetime import datetime, timezone
 import difflib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-####################################################################################
+#####################################################################################
+#                               Gestione cartelle remote
+
+# Funzione per controllare la presenza delle cartelle test01 - test30 nella dir remota
+def scan_test_folders():
+    remote_directory = entry_remote_directory.get()
+    report_text.delete(1.0, tk.END)
+
+    if not os.path.exists(remote_directory):
+        messagebox.showerror("Errore", "La directory specificata non esiste.")
+        return
+
+    report_text.insert(tk.END, f"Controllo nella directory: {remote_directory}\n")
+
+    for i in range(1, 31):
+        folder_name = f"test{str(i).zfill(2)}"
+        folder_path = os.path.join(remote_directory, folder_name)
+        if os.path.isdir(folder_path):
+            report_text.insert(tk.END, f"Trovata: {folder_name}\n")
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    creation_time = datetime.fromtimestamp(os.path.getctime(file_path), tz=timezone.utc)
+
+                    report_text.insert(tk.END, f"  - {file} (Creato il: {creation_time})\n")
+        else:
+            report_text.insert(tk.END, f"Mancante: {folder_name}\n")
+
+# Funzione per copiare le cartelle in una nuova directory sul desktop
+def create_local_copy():
+    global local_copy_directory
+    remote_directory = entry_remote_directory.get()
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    timestamp = datetime.now().strftime("%Y%m%d_%H-%M")
+    new_directory = os.path.join(desktop, timestamp)
+    os.makedirs(new_directory, exist_ok=True)
+
+    for i in range(1, 31):
+        folder_name = f"test{str(i).zfill(2)}"
+        src = os.path.join(remote_directory, folder_name)
+        dest = os.path.join(new_directory, folder_name)
+        if os.path.exists(src):
+            shutil.copytree(src, dest, dirs_exist_ok=True)  # Copia anche il contenuto
+
+    report_text.insert(tk.END, f"Copie create in: {new_directory}\n")
+    lbl_directory.config(text=f"Directory selezionata: {new_directory}")
+    local_copy_directory = new_directory
+
+    update_directory_listing(new_directory)
+    update_subdirectories_list(new_directory)  # Aggiorna anche il Treeview
+
+# Funzione per pulire il contenuto delle cartelle test
+def clear_test_folders():
+    selected_directory = entry_remote_directory.get()
+
+    if not selected_directory:
+        messagebox.showwarning("Attenzione", "Seleziona prima una directory.")
+        return
+
+    confirm = messagebox.askyesno("Conferma", "Sei sicuro di voler cancellare i dati nelle cartelle test?")
+    if not confirm:
+        return
+
+    confirm_final = messagebox.askyesno("Conferma finale", "Questa azione è irreversibile. Continuare?")
+    if not confirm_final:
+        return
+    
+    confirm_final_final = messagebox.askyesno("Conferma finalissima", "Siamo proprio sicuri sicuri??? Continuare?")
+    if not confirm_final_final:
+        return
+
+    for i in range(1, 31):
+        folder_name = f"test{str(i).zfill(2)}"
+        folder_path = os.path.join(selected_directory, folder_name)
+        if os.path.exists(folder_path):
+            for root, dirs, files in os.walk(folder_path, topdown=False):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        report_text.insert(tk.END, f"Errore durante la cancellazione di {file_path}: {str(e)}\n")
+                for dir in dirs:
+                    dir_path = os.path.join(root, dir)
+                    try:
+                        shutil.rmtree(dir_path)
+                    except Exception as e:
+                        report_text.insert(tk.END, f"Errore durante la cancellazione di {dir_path}: {str(e)}\n")
+
+    report_text.insert(tk.END, "Tutte le cartelle test remote sono state pulite.\n")
+
+
+#######################################################################################
 #                                   REPORT
 def mix_files():
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
@@ -75,18 +169,55 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
                     mix_file.write(f"{os.path.basename(file_path)}\n{current_file.read()}\n")
 
         tree.tag_configure(subdir, background="green")
-        return f"Mix completato per {subdir}: file {extension} creato con successo.\n"
+        return f"Mix completato per {subdir}: file con estensione {extension} uniti con successo.\n"
     except Exception as e:
         return f"Errore durante il mix per {subdir}: {str(e)}\n"
 
 def choose_directory():
+    '''
+    global local_copy_directory
+    if 'local_copy_directory' in globals() and local_copy_directory:
+        lbl_directory.config(text=f"Directory selezionata: {local_copy_directory}")
+        update_directory_listing(local_copy_directory)
+        update_subdirectories_list(local_copy_directory)
+    else:
+    '''
     selected_directory = filedialog.askdirectory()
     if selected_directory:
         lbl_directory.config(text=f"Directory selezionata: {selected_directory}")
+        update_directory_listing(selected_directory)
         update_subdirectories_list(selected_directory)
 
-############################################################################################################################################
-#                                   Popolamento Report
+# Funzione per aggiornare la lista dei file con filtro per estensione
+def update_directory_listing(directory):
+    report_text.delete(1.0, tk.END)
+    file_extension = entry_extension.get().strip()
+
+    if not file_extension.startswith('.') and file_extension != '':
+        file_extension = f".{file_extension}"  # Aggiungi il punto se manca
+
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if file_extension == '' or file.endswith(file_extension):  # Filtra per estensione se specificata
+                file_path = os.path.join(root, file)
+                report_text.insert(tk.END, f"{file_path}\n")
+
+# Funzione per aggiornare la lista delle subdirectory nel Treeview
+def update_subdirectories_list(directory):
+    tree.delete(*tree.get_children())  # Pulisce il contenuto attuale del Treeview
+
+    for subdir in os.listdir(directory):
+        subdir_path = os.path.join(directory, subdir)
+        if os.path.isdir(subdir_path):
+            num_files = sum(len(files) for _, _, files in os.walk(subdir_path))
+            extension_files = [f for f in os.listdir(subdir_path) if f.endswith(entry_extension.get())]
+            num_extension_files = len(extension_files)
+
+            tree.insert("", "end", values=(subdir, len(os.listdir(subdir_path)), num_files, num_extension_files, ", ".join(extension_files)))
+
+
+#########################################################################################################
+#                                   Popolamento ListaFIle
 
 def update_subdirectories_list(selected_directory):
     subdirectories = [d for d in os.listdir(selected_directory) if os.path.isdir(os.path.join(selected_directory, d))]
@@ -123,7 +254,7 @@ def count_directory_content(directory):
     return num_folders, num_files, num_extension_files, extension_files
 
 ########################################################################################
-#                                   MEGAmerge 
+#                                   MEGAmerge per Stampa
 
 def merge_all_files():
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
@@ -195,9 +326,8 @@ def plot_similarity_matrix(output_directory):
     return files, similarity_matrix
 
 #####################################################################################################
-#                                       GUI
-#                              Finestra di confronto
-
+#                                       GUI - Similarità
+#                                      Finestra di confronto
 
 def show_similar_fragments(file1, file2, matcher):
     top = Toplevel(root)
@@ -270,7 +400,7 @@ def analyze_similarities():
 
 
 ############################################################################################################
-#                                               GUI
+#                                               GUI - MAIN
 
 root = tk.Tk()
 root.title("Ninei - Smixer_v5")
@@ -278,46 +408,66 @@ root.geometry("1024x768")
 
 # Layout principale con grid
 root.columnconfigure(3, weight=1)  # Colonna principale
-root.rowconfigure(8, weight=1)    # Riga che contiene il treeview (espandibile)
+root.rowconfigure(11, weight=1)    # Riga che contiene il treeview (espandibile)
+
+#Gestione cartelle remote
+
+# Directory remota
+lbl_remote_directory = tk.Label(root, text="Directory remota:")
+lbl_remote_directory.grid(row=0, column=0, sticky="w", padx=10, pady=5)
+
+entry_remote_directory = tk.Entry(root, width=50)
+entry_remote_directory.insert(0, "Y:\\")  # Directory predefinita
+entry_remote_directory.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+
+# Bottoni per la gestione delle cartelle remote
+btn_scan = tk.Button(root, text="Scan", command=scan_test_folders)
+btn_scan.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
+
+btn_copy = tk.Button(root, text="Crea Copia Locale", command=create_local_copy)
+btn_copy.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
+
+btn_clear = tk.Button(root, text="Pulisci Test Remoti", command=clear_test_folders)
+btn_clear.grid(row=1, column=2, sticky="ew", padx=5, pady=5)
 
 # Stringa Prompt
 lbl_prompt = tk.Label(root, text="INTRO:")
-lbl_prompt.grid(row=0, column=0, sticky="w", padx=10, pady=5)
+lbl_prompt.grid(row=2, column=0, sticky="w", padx=10, pady=5)
 
 entry_prompt = tk.Text(root, width=80, height=2)
-entry_prompt.grid(row=0, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+entry_prompt.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
 # Casella di spunta per includere o escludere l'Intro
 include_prompt_var = tk.BooleanVar(value=True)  # Di default, è selezionata
 chk_include_prompt = tk.Checkbutton(root, text="Includi Intro", variable=include_prompt_var)
-chk_include_prompt.grid(row=1, column=1, sticky="w", padx=10, pady=5)
+chk_include_prompt.grid(row=3, column=1, sticky="w", padx=10, pady=5)
 
 # Aggiungi una casella di spunta per l'inclusione della subdirectory
 include_subdir_var = tk.BooleanVar(value=True)  # Di default, selezionata
 chk_include_subdir = tk.Checkbutton(root, text="Includi Nome", variable=include_subdir_var)
-chk_include_subdir.grid(row=1, column=2, sticky="w", padx=10, pady=5)
+chk_include_subdir.grid(row=3, column=2, sticky="w", padx=10, pady=5)
 
 # Estensione file
 lbl_extension = tk.Label(root, text="Estensione dei file:")
-lbl_extension.grid(row=2, column=0, sticky="w", padx=10, pady=5)
+lbl_extension.grid(row=4, column=0, sticky="w", padx=10, pady=5)
 
 entry_extension = tk.Entry(root)
-entry_extension.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+entry_extension.grid(row=4, column=1, sticky="ew", padx=10, pady=5)
 
 # Bottone Scegli Directory
 btn_choose_directory = tk.Button(root, text="Scegli Directory", command=choose_directory)
-btn_choose_directory.grid(row=3, column=0, columnspan=1, sticky="ew", padx=10, pady=5)
+btn_choose_directory.grid(row=5, column=0, columnspan=1, sticky="ew", padx=10, pady=5)
 
 lbl_directory = tk.Label(root, text="Directory non selezionata", anchor="w")
-lbl_directory.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+lbl_directory.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
 # Lista delle subdirectories con icona di stato e numero di cartelle, file, file con estensione
 tree = ttk.Treeview(root, columns=("subdirectory", "num_folders", "num_files", "num_extension_files", "extension_files"), show="headings")
-tree.grid(row=5, column=0, columnspan=3, sticky="nsew", padx=10, pady=10)
+tree.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=10)
 
 # Configurazione delle colonne della griglia (per espandibilità)
 root.columnconfigure(2, weight=1)
-root.rowconfigure(5, weight=1)  # Espandi la griglia per il treeview
+root.rowconfigure(6, weight=1)  # Espandi la griglia per il treeview
 
 tree.column("subdirectory", anchor="w", width=200, minwidth=200)
 tree.column("num_folders", anchor="center", width=100, minwidth=100)
@@ -331,31 +481,32 @@ tree.heading("num_files", text="File")
 tree.heading("num_extension_files", text="File con Estensione")
 tree.heading("extension_files", text="Elenco File Estensione")
 
-# Bottoni
+# Bottone Mix
 btn_mix = tk.Button(root, text="Mixa", command=mix_files)
-btn_mix.grid(row=6, column=0, sticky="ew", padx=10, pady=5)
+btn_mix.grid(row=7, column=0, sticky="ew", padx=10, pady=5)
 
 #Bottone per il merge dei file
 btn_merge_files = tk.Button(root, text="MEGAmerge", command=merge_all_files)
-btn_merge_files.grid(row=6, column=1, sticky="ew", padx=10, pady=5)
-
-btn_analyze = tk.Button(root, text="Analizza Similarità", command=analyze_similarities)
-btn_analyze.grid(row=6, column=2, sticky="ew", padx=10, pady=5)
+btn_merge_files.grid(row=7, column=1, sticky="ew", padx=10, pady=5)
 
 # Bottone per aprire la directory
 btn_open_directory = tk.Button(root, text="Apri Directory Output", command=open_selected_directory)
-btn_open_directory.grid(row=6, column=2, sticky="ew", padx=10, pady=5)
+btn_open_directory.grid(row=7, column=2, sticky="ew", padx=10, pady=5)
+
+#Bottone per heatmap
+btn_analyze = tk.Button(root, text="Analizza Similarità", command=analyze_similarities)
+btn_analyze.grid(row=8, column=0, sticky="ew", padx=10, pady=5)
 
 # Report
 lbl_report = tk.Label(root, text="Report:")
-lbl_report.grid(row=7, column=0, sticky="nw", padx=10, pady=5)
+lbl_report.grid(row=9, column=0, sticky="nw", padx=10, pady=5)
 
 report_text = tk.Text(root, width=1024, height=12)
-report_text.grid(row=8, column=0, columnspan=3, sticky="nsew", padx=10, pady=5)
+report_text.grid(row=10, column=0, columnspan=3, sticky="nsew", padx=10, pady=5)
 
 # Scrollbar per il report
 scrollbar = Scrollbar(root, orient="vertical", command=report_text.yview)
-scrollbar.grid(row=8, column=3, sticky="ns", pady=5)
+scrollbar.grid(row=10, column=3, sticky="ns", pady=5)
 
 report_text.config(yscrollcommand=scrollbar.set)
 
