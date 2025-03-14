@@ -151,7 +151,7 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
         if not files_to_mix:
             return f"Nessun file con estensione {extension} trovato nella subdirectory {subdir}. File di mix non creato.\n"
 
-        with open(mix_file_path, "w") as mix_file:
+        with open(mix_file_path, "w",encoding="utf-8") as mix_file:
 
             # Includi l'intro solo se la casella di spunta è selezionata
             if include_prompt_var.get():
@@ -259,11 +259,11 @@ def merge_all_files():
         return
 
     try:
-        with open(merged_file_path, "w") as merged_file:
+        with open(merged_file_path, "w", encoding="utf-8") as merged_file:
             for file_name in sorted(os.listdir(output_directory)):
                 if file_name.endswith("_mix.txt"):
                     file_path = os.path.join(output_directory, file_name)
-                    with open(file_path, "r") as f:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         merged_file.write(f.read())
                         merged_file.write("\n\f\n")  # Interruzione di pagina
         report_text.insert(tk.END, f"Merge completato. File creato: {merged_file_path}\n")
@@ -276,7 +276,7 @@ def merge_all_files():
 
 def calculate_similarity(file1_path, file2_path):
     try:
-        with open(file1_path, 'r') as file1, open(file2_path, 'r') as file2:
+        with open(file1_path, 'r',encoding="utf-8") as file1, open(file2_path, 'r',encoding="utf-8") as file2:
             content1 = file1.read().replace('\r\n', '\n').replace('\r', '\n')
             content2 = file2.read().replace('\r\n', '\n').replace('\r', '\n')
             matcher = difflib.SequenceMatcher(None, content1, content2)
