@@ -84,6 +84,14 @@ entry_prompt = tk.Text(root, width=80, height=2)
 entry_prompt.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 entry_prompt.bind("<KeyRelease>", mark_unsaved)
 
+# Bottone "Mixa" spostato sulla stessa riga delle checkbox (riga 3, colonna 0)
+def on_mix():
+    mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt_var.get(), include_subdir_var.get())
+    mark_unsaved()
+
+btn_mix = tk.Button(root, text="Mixa", command=on_mix)
+btn_mix.grid(row=3, column=0, sticky="ew", padx=10, pady=5)
+
 # Checkbox per le opzioni di inclusione
 chk_include_prompt = tk.Checkbutton(root, text="Includi Intro", variable=include_prompt_var)
 chk_include_prompt.grid(row=3, column=1, sticky="w", padx=10, pady=5)
@@ -91,13 +99,7 @@ chk_include_prompt.grid(row=3, column=1, sticky="w", padx=10, pady=5)
 chk_include_subdir = tk.Checkbutton(root, text="Includi Nome", variable=include_subdir_var)
 chk_include_subdir.grid(row=3, column=2, sticky="w", padx=10, pady=5)
 
-# Bottone "Mixa" spostato sulla stessa riga delle checkbox (riga 3, colonna 3)
-def on_mix():
-    mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt_var.get(), include_subdir_var.get())
-    mark_unsaved()
 
-btn_mix = tk.Button(root, text="Mixa", command=on_mix)
-btn_mix.grid(row=3, column=3, sticky="ew", padx=10, pady=5)
 
 lbl_extension = tk.Label(root, text="Estensione dei file:")
 lbl_extension.grid(row=4, column=0, sticky="w", padx=10, pady=5)
