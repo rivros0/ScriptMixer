@@ -3,7 +3,19 @@ import textwrap
 from tkinter import messagebox
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Preformatted, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Preformatted, PageBreak, Flowable
+
+class BlankPageIfNeeded(Flowable):
+    """
+    Flowable che, al momento del disegno, verifica se la pagina corrente è dispari
+    e, in tal caso, forza l'inserimento di una pagina vuota.
+    """
+    def wrap(self, availWidth, availHeight):
+        return (0, 0)
+    
+    def draw(self):
+        if self.canv.getPageNumber() % 2 != 0:
+            self.canv.showPage()
 
 def mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt, include_subdir):
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
@@ -47,8 +59,6 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
     except Exception as e:
         return f"Errore durante il mix per {subdir}: {str(e)}\n"
 
-
-
 def wrap_preserve_indent(text, width):
     """
     Per ogni riga del testo, se la lunghezza supera 'width', la riga viene spezzata
@@ -73,6 +83,8 @@ def merge_all_files(lbl_directory, report_text):
     Ogni file viene letto, le righe troppo lunghe vengono avvolte tramite wrap_preserve_indent,
     il contenuto viene inserito come blocco Preformatted (che mantiene indentazioni e spaziatura)
     e viene inserita una interruzione di pagina dopo ogni file.
+    Inoltre, viene aggiunto il flowable BlankPageIfNeeded per garantire che ogni prova inizi
+    su una pagina dispari, ottimizzando la stampa fronte/retro senza mescolare le prove.
     """
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
     output_directory = os.path.join(selected_directory, "00_MixOutput")
@@ -85,7 +97,7 @@ def merge_all_files(lbl_directory, report_text):
     try:
         doc = SimpleDocTemplate(merged_pdf_path, pagesize=A4)
         styles = getSampleStyleSheet()
-        # Definisce uno stile monospace per garantire l'uniformità delle indentazioni
+        # Definiamo uno stile monospace per garantire l'uniformità delle indentazioni
         monospace_style = ParagraphStyle('Monospace', parent=styles['Normal'], fontName='Courier', fontSize=10, leading=12)
         story = []
         
@@ -101,6 +113,8 @@ def merge_all_files(lbl_directory, report_text):
                 wrapped_content = wrap_preserve_indent(content, max_char_width)
                 story.append(Preformatted(wrapped_content, monospace_style))
                 story.append(PageBreak())
+                # Aggiunge il flowable per forzare una pagina vuota se necessario
+                story.append(BlankPageIfNeeded())
         
         doc.build(story)
         report_text.insert("end", f"Merge completato. File PDF creato: {merged_pdf_path}\n")
