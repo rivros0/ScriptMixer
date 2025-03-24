@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 import os
 import json
 
@@ -7,6 +7,17 @@ from data_handler import scan_test_folders, create_local_copy, clear_test_folder
 from business_logic import mix_files, merge_all_files
 from similarity import analyze_similarities
 from utils import update_directory_listing, update_subdirectories_list
+
+# Variabile globale per tracciare se la configurazione è stata salvata
+config_saved = True
+
+def mark_unsaved(event=None):
+    global config_saved
+    config_saved = False
+
+def trace_unsaved(*args):
+    global config_saved
+    config_saved = False
 
 # Creazione della finestra principale
 root = tk.Tk()
@@ -19,7 +30,9 @@ root.rowconfigure(11, weight=1)
 
 # Variabili di opzione
 include_prompt_var = tk.BooleanVar(value=True)
+include_prompt_var.trace("w", trace_unsaved)
 include_subdir_var = tk.BooleanVar(value=True)
+include_subdir_var.trace("w", trace_unsaved)
 
 # --- Sezione: Gestione cartelle remote ---
 lbl_remote_directory = tk.Label(root, text="Directory remota:")
@@ -28,6 +41,7 @@ lbl_remote_directory.grid(row=0, column=0, sticky="w", padx=10, pady=5)
 entry_remote_directory = tk.Entry(root, width=50)
 entry_remote_directory.insert(0, "Y:\\")  # Directory predefinita
 entry_remote_directory.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+entry_remote_directory.bind("<KeyRelease>", mark_unsaved)
 
 # Funzione per il comando Scan
 def on_scan():
@@ -48,6 +62,7 @@ def update_subdirs_list_wrapper(directory):
 def on_copy():
     remote_dir = entry_remote_directory.get()
     create_local_copy(remote_dir, report_text, lbl_directory, update_dir_listing_wrapper, update_subdirs_list_wrapper)
+    mark_unsaved()
 
 btn_copy = tk.Button(root, text="Crea Copia Locale", command=on_copy)
 btn_copy.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
@@ -56,6 +71,7 @@ btn_copy.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
 def on_clear():
     selected_dir = entry_remote_directory.get()
     clear_test_folders(selected_dir, report_text)
+    mark_unsaved()
 
 btn_clear = tk.Button(root, text="Pulisci Test Remoti", command=on_clear)
 btn_clear.grid(row=1, column=2, sticky="ew", padx=5, pady=5)
@@ -66,6 +82,7 @@ lbl_prompt.grid(row=2, column=0, sticky="w", padx=10, pady=5)
 
 entry_prompt = tk.Text(root, width=80, height=2)
 entry_prompt.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+entry_prompt.bind("<KeyRelease>", mark_unsaved)
 
 chk_include_prompt = tk.Checkbutton(root, text="Includi Intro", variable=include_prompt_var)
 chk_include_prompt.grid(row=3, column=1, sticky="w", padx=10, pady=5)
@@ -78,6 +95,7 @@ lbl_extension.grid(row=4, column=0, sticky="w", padx=10, pady=5)
 
 entry_extension = tk.Entry(root)
 entry_extension.grid(row=4, column=1, sticky="ew", padx=10, pady=5)
+entry_extension.bind("<KeyRelease>", mark_unsaved)
 
 # Funzioni wrapper per il comando "Scegli Directory"
 def update_dir_listing_for_choice(directory):
@@ -88,6 +106,7 @@ def update_subdirs_list_for_choice(directory):
 
 def on_choose_directory():
     choose_directory(lbl_directory, update_dir_listing_for_choice, update_subdirs_list_for_choice)
+    mark_unsaved()
 
 btn_choose_directory = tk.Button(root, text="Scegli Directory", command=on_choose_directory)
 btn_choose_directory.grid(row=5, column=0, sticky="ew", padx=10, pady=5)
@@ -116,12 +135,14 @@ tree.heading("extension_files", text="Elenco File Estensione")
 # --- Sezione: Azioni Mix e Merge ---
 def on_mix():
     mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt_var.get(), include_subdir_var.get())
+    mark_unsaved()
 
 btn_mix = tk.Button(root, text="Mixa", command=on_mix)
 btn_mix.grid(row=7, column=0, sticky="ew", padx=10, pady=5)
 
 def on_merge():
     merge_all_files(lbl_directory, report_text)
+    mark_unsaved()
 
 btn_merge_files = tk.Button(root, text="MEGAmerge", command=on_merge)
 btn_merge_files.grid(row=7, column=1, sticky="ew", padx=10, pady=5)
@@ -154,8 +175,9 @@ report_text.config(yscrollcommand=scrollbar.set)
 
 def on_save_config():
     """
-    Salva la configurazione corrente in un file JSON.
+    Salva la configurazione corrente in un file JSON, includendo anche la directory di lavoro.
     """
+    global config_saved
     config = {
         "remote_directory": entry_remote_directory.get(),
         "prompt_text": entry_prompt.get("1.0", "end").strip(),
@@ -173,11 +195,13 @@ def on_save_config():
     if file_path:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
+        config_saved = True
 
 def on_load_config():
     """
-    Carica la configurazione da un file JSON e aggiorna i campi della GUI.
+    Carica la configurazione da un file JSON, aggiorna i campi della GUI e la sezione Treeview.
     """
+    global config_saved
     file_path = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
     if file_path:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -198,13 +222,34 @@ def on_load_config():
         selected_directory = config.get("selected_directory", "")
         if selected_directory:
             lbl_directory.config(text=f"Directory selezionata: {selected_directory}")
+            update_dir_listing_for_choice(selected_directory)
+            update_subdirs_list_for_choice(selected_directory)
         else:
             lbl_directory.config(text="Directory non selezionata")
+        
+        config_saved = True
+
+def on_exit():
+    """
+    Verifica se la configurazione corrente è stata salvata. Se non lo è,
+    propone all'utente di salvarla prima di uscire.
+    """
+    global config_saved
+    if not config_saved:
+        risposta = messagebox.askyesnocancel("Configurazione non salvata",
+                                              "La configurazione corrente non è stata salvata. Vuoi salvarla prima di uscire?")
+        if risposta is None:
+            return  # Annulla l'uscita
+        elif risposta:
+            on_save_config()
+    root.destroy()
 
 menubar = tk.Menu(root)
 filemenu = tk.Menu(menubar, tearoff=0)
 filemenu.add_command(label="Salva Configurazione", command=on_save_config)
 filemenu.add_command(label="Carica Configurazione", command=on_load_config)
+filemenu.add_separator()
+filemenu.add_command(label="Esci", command=on_exit)
 menubar.add_cascade(label="File", menu=filemenu)
 root.config(menu=menubar)
 

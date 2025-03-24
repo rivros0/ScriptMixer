@@ -27,12 +27,13 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
         with open(mix_file_path, "w", encoding="utf-8") as mix_file:
             if include_prompt:
                 mix_file.write(prompt_string + "\n")
-                mix_file.write("###############################################################" + "\n\n")
+                #mix_file.write("###############################################################" + "\n\n")
             if include_subdir:
                 mix_file.write(subdir + "\n\n")
-                mix_file.write("###############################################################" + "\n\n")
+                #mix_file.write("###############################################################" + "\n\n")
             for file_path in files_to_mix:
                 with open(file_path, "r", encoding="utf-8") as current_file:
+                    mix_file.write("###############################################################" + "\n\n")
                     mix_file.write(f"{os.path.basename(file_path)}\n{current_file.read()}\n")
         return f"Mix completato per {subdir}: file con estensione {extension} uniti con successo.\n"
     except Exception as e:
