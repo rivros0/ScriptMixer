@@ -31,17 +31,22 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
         with open(mix_file_path, "w", encoding="utf-8") as mix_file:
             if include_prompt:
                 mix_file.write(prompt_string + "\n")
-                # La linea separatrice è stata commentata per consentire una migliore gestione del layout nel PDF
             if include_subdir:
                 mix_file.write(subdir + "\n\n")
-                # La linea separatrice è stata commentata per consentire una migliore gestione del layout nel PDF
             for file_path in files_to_mix:
-                with open(file_path, "r", encoding="utf-8") as current_file:
-                    mix_file.write("###############################################################" + "\n\n")
-                    mix_file.write(f"{os.path.basename(file_path)}\n{current_file.read()}\n")
+                try:
+                    with open(file_path, "r", encoding="utf-8") as current_file:
+                        content = current_file.read()
+                except UnicodeDecodeError:
+                    # Se la lettura in utf-8 fallisce, utilizza latin-1 con sostituzione degli errori
+                    with open(file_path, "r", encoding="latin-1", errors="replace") as current_file:
+                        content = current_file.read()
+                mix_file.write("###############################################################" + "\n\n")
+                mix_file.write(f"{os.path.basename(file_path)}\n{content}\n")
         return f"Mix completato per {subdir}: file con estensione {extension} uniti con successo.\n"
     except Exception as e:
         return f"Errore durante il mix per {subdir}: {str(e)}\n"
+
 
 
 def wrap_preserve_indent(text, width):
