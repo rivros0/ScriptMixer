@@ -21,7 +21,13 @@ def update_subdirectories_list(selected_directory, tree, entry_extension):
 def check_directory_content(base_directory, subdir, tree, entry_extension):
     full_path = os.path.join(base_directory, subdir)
     num_folders, num_files, num_extension_files, extension_files = count_directory_content(full_path, entry_extension)
-    tree.insert("", "end", values=(subdir, num_folders, num_files, num_extension_files, ", ".join(extension_files)))
+    mix_file_path = os.path.join(base_directory, "00_MixOutput", f"{subdir}_mix.txt")
+    if os.path.exists(mix_file_path):
+        button_text = "CopiaInClipboard"
+    else:
+        button_text = "-----"
+    tree.insert("", "end", values=(subdir, num_folders, num_files, num_extension_files, ", ".join(extension_files), button_text))
+
 
 def count_directory_content(directory, entry_extension):
     num_folders = 0

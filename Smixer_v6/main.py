@@ -84,11 +84,20 @@ entry_prompt = tk.Text(root, width=80, height=2)
 entry_prompt.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 entry_prompt.bind("<KeyRelease>", mark_unsaved)
 
+# Checkbox per le opzioni di inclusione
 chk_include_prompt = tk.Checkbutton(root, text="Includi Intro", variable=include_prompt_var)
 chk_include_prompt.grid(row=3, column=1, sticky="w", padx=10, pady=5)
 
 chk_include_subdir = tk.Checkbutton(root, text="Includi Nome", variable=include_subdir_var)
 chk_include_subdir.grid(row=3, column=2, sticky="w", padx=10, pady=5)
+
+# Bottone "Mixa" spostato sulla stessa riga delle checkbox (riga 3, colonna 3)
+def on_mix():
+    mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt_var.get(), include_subdir_var.get())
+    mark_unsaved()
+
+btn_mix = tk.Button(root, text="Mixa", command=on_mix)
+btn_mix.grid(row=3, column=3, sticky="ew", padx=10, pady=5)
 
 lbl_extension = tk.Label(root, text="Estensione dei file:")
 lbl_extension.grid(row=4, column=0, sticky="w", padx=10, pady=5)
@@ -115,7 +124,8 @@ lbl_directory = tk.Label(root, text="Directory non selezionata", anchor="w")
 lbl_directory.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
 # --- Sezione: Treeview per le subdirectories ---
-tree = ttk.Treeview(root, columns=("subdirectory", "num_folders", "num_files", "num_extension_files", "extension_files"), show="headings")
+# La Treeview include ora una sesta colonna "Azione"
+tree = ttk.Treeview(root, columns=("subdirectory", "num_folders", "num_files", "num_extension_files", "extension_files", "copia"), show="headings")
 tree.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=10)
 root.columnconfigure(2, weight=1)
 root.rowconfigure(6, weight=1)
@@ -125,20 +135,53 @@ tree.column("num_folders", anchor="center", width=100, minwidth=100)
 tree.column("num_files", anchor="center", width=100, minwidth=100)
 tree.column("num_extension_files", anchor="center", width=150, minwidth=150)
 tree.column("extension_files", anchor="w", width=300, minwidth=300)
+tree.column("copia", anchor="center", width=150, minwidth=150)
 
 tree.heading("subdirectory", text="Subdirectory")
 tree.heading("num_folders", text="Cartelle")
 tree.heading("num_files", text="File")
 tree.heading("num_extension_files", text="File con Estensione")
 tree.heading("extension_files", text="Elenco File Estensione")
+tree.heading("copia", text="Azione")
 
-# --- Sezione: Azioni Mix e Merge ---
-def on_mix():
-    mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt_var.get(), include_subdir_var.get())
-    mark_unsaved()
+# Binding per gestire il click sulla colonna "Azione"
+def on_treeview_click(event):
+    region = tree.identify("region", event.x, event.y)
+    if region == "cell":
+        col = tree.identify_column(event.x)
+        # La colonna "copia" è la sesta, identificata da "#6"
+        if col == "#6":
+            row_id = tree.identify_row(event.y)
+            if row_id:
+                values = tree.item(row_id, "values")
+                subdir = values[0]  # Nome della subdirectory
+                # Recupera la directory di lavoro
+                selected_dir_text = lbl_directory.cget("text")
+                if selected_dir_text.startswith("Directory selezionata: "):
+                    selected_dir = selected_dir_text.replace("Directory selezionata: ", "")
+                else:
+                    selected_dir = ""
+                mix_file_path = os.path.join(selected_dir, "00_MixOutput", f"{subdir}_mix.txt")
+                if os.path.exists(mix_file_path):
+                    try:
+                        with open(mix_file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        root.clipboard_clear()
+                        root.clipboard_append(content)
+                        messagebox.showinfo("Copia in Clipboard", f"Contenuto di {subdir}_mix.txt copiato nella clipboard.")
+                    except Exception as e:
+                        messagebox.showerror("Errore", f"Errore nella copia: {str(e)}")
+                else:
+                    messagebox.showwarning("Attenzione", "File di mix non presente per questa subdirectory.")
 
-btn_mix = tk.Button(root, text="Mixa", command=on_mix)
-btn_mix.grid(row=7, column=0, sticky="ew", padx=10, pady=5)
+tree.bind("<Button-1>", on_treeview_click)
+
+# --- Sezione: Altre Azioni ---
+def on_analyze():
+    analyze_similarities(lbl_directory, report_text)
+
+btn_analyze = tk.Button(root, text="Analizza Similarità", command=on_analyze)
+btn_analyze.grid(row=7, column=0, sticky="ew", padx=10, pady=5)
 
 def on_merge():
     merge_all_files(lbl_directory, report_text)
@@ -154,11 +197,7 @@ def on_open_directory():
 btn_open_directory = tk.Button(root, text="Apri Directory Output", command=on_open_directory)
 btn_open_directory.grid(row=7, column=2, sticky="ew", padx=10, pady=5)
 
-def on_analyze():
-    analyze_similarities(lbl_directory, report_text)
 
-btn_analyze = tk.Button(root, text="Analizza Similarità", command=on_analyze)
-btn_analyze.grid(row=8, column=0, sticky="ew", padx=10, pady=5)
 
 # --- Sezione: Report ---
 lbl_report = tk.Label(root, text="Report:")
