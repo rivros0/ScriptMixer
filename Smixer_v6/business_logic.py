@@ -1,35 +1,67 @@
 import os
 import textwrap
+import io
 from tkinter import messagebox
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Preformatted, PageBreak, Flowable
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Preformatted,
+    PageBreak,
+    Spacer,
+    KeepTogether
+)
+from PyPDF2 import PdfReader, PdfWriter
 
-class BlankPageIfNeeded(Flowable):
+# Array globale per salvare i marker: ogni elemento è una tupla (marker_text, subdir)
+markers = []
+
+def wrap_preserve_indent(text, width):
     """
-    Flowable che, al momento del disegno, verifica se la pagina corrente è dispari
-    e, in tal caso, forza l'inserimento di una pagina vuota.
+    Avvolge il testo riga per riga mantenendo l'indentazione.
     """
-    def wrap(self, availWidth, availHeight):
-        return (0, 0)
-    
-    def draw(self):
-        if self.canv.getPageNumber() % 2 != 0:
-            self.canv.showPage()
+    lines = text.splitlines()
+    wrapped_lines = []
+    for line in lines:
+        if len(line) <= width:
+            wrapped_lines.append(line)
+        else:
+            leading = len(line) - len(line.lstrip())
+            indent = line[:leading]
+            wrapped = textwrap.fill(
+                line,
+                width=width,
+                initial_indent=indent,
+                subsequent_indent=indent,
+                drop_whitespace=False
+            )
+            wrapped_lines.append(wrapped)
+    return "\n".join(wrapped_lines)
 
 def mix_files(lbl_directory, entry_prompt, entry_extension, tree, report_text, include_prompt, include_subdir):
+    """
+    Crea il file di mix per ciascuna subdirectory e li scrive su disco.
+    Durante la creazione viene utilizzata la stringa della subdirectory come marker,
+    che viene salvato nell'array globale markers.
+    """
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
     prompt_string = entry_prompt.get("1.0", "end").strip()
     extension = entry_extension.get()
     output_directory = os.path.join(selected_directory, "00_MixOutput")
     os.makedirs(output_directory, exist_ok=True)
     report_text.delete("1.0", "end")
+    global markers
+    markers = []
     for item in tree.get_children():
         subdir = tree.item(item, "values")[0]
         mix_result = create_mix_file(selected_directory, subdir, prompt_string, extension, output_directory, include_prompt, include_subdir)
         report_text.insert("end", mix_result)
 
 def create_mix_file(base_directory, subdir, prompt_string, extension, output_directory, include_prompt, include_subdir):
+    """
+    Crea il file di mix per una specifica subdirectory.
+    In questo esempio, usiamo il nome della subdirectory come marker.
+    """
     full_path = os.path.join(base_directory, subdir)
     mix_file_path = os.path.join(output_directory, f"{subdir}_mix.txt")
     try:
@@ -50,73 +82,77 @@ def create_mix_file(base_directory, subdir, prompt_string, extension, output_dir
                     with open(file_path, "r", encoding="utf-8") as current_file:
                         content = current_file.read()
                 except UnicodeDecodeError:
-                    # Se la lettura in utf-8 fallisce, utilizza latin-1 con sostituzione degli errori
                     with open(file_path, "r", encoding="latin-1", errors="replace") as current_file:
                         content = current_file.read()
-                mix_file.write("###############################################################" + "\n\n")
+                mix_file.write("###############################################################\n\n")
                 mix_file.write(f"{os.path.basename(file_path)}\n{content}\n")
+        # Usa il nome della subdirectory come marker
+        global markers
+        markers.append((subdir, subdir))
         return f"Mix completato per {subdir}: file con estensione {extension} uniti con successo.\n"
     except Exception as e:
         return f"Errore durante il mix per {subdir}: {str(e)}\n"
 
-def wrap_preserve_indent(text, width):
-    """
-    Per ogni riga del testo, se la lunghezza supera 'width', la riga viene spezzata
-    mantenendo l'indentazione originale.
-    """
-    lines = text.splitlines()
-    wrapped_lines = []
-    for line in lines:
-        if len(line) <= width:
-            wrapped_lines.append(line)
-        else:
-            # Recupera gli spazi iniziali (indentazione)
-            leading = len(line) - len(line.lstrip())
-            indent = line[:leading]
-            wrapped = textwrap.fill(line, width=width, initial_indent=indent, subsequent_indent=indent, drop_whitespace=False)
-            wrapped_lines.append(wrapped)
-    return "\n".join(wrapped_lines)
-
 def merge_all_files(lbl_directory, report_text):
     """
-    Genera un file PDF contenente il merge dei file di mix.
-    Ogni file viene letto, le righe troppo lunghe vengono avvolte tramite wrap_preserve_indent,
-    il contenuto viene inserito come blocco Preformatted (che mantiene indentazioni e spaziatura)
-    e viene inserita una interruzione di pagina dopo ogni file.
-    Inoltre, viene aggiunto il flowable BlankPageIfNeeded per garantire che ogni prova inizi
-    su una pagina dispari, ottimizzando la stampa fronte/retro senza mescolare le prove.
+    Genera un PDF finale in cui ogni blocco (contenuto di un file _mix.txt) viene
+    esteso a un numero pari di pagine.
     """
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
     output_directory = os.path.join(selected_directory, "00_MixOutput")
-    merged_pdf_path = os.path.join(output_directory, "00_MEGAmerged_output.pdf")
+    final_pdf_path = os.path.join(output_directory, "00_MEGAmerged_output_final.pdf")
     
     if not os.path.exists(output_directory):
         messagebox.showwarning("Attenzione", "La directory 00_MixOutput non esiste. Esegui prima la fase di mix.")
         return
 
     try:
-        doc = SimpleDocTemplate(merged_pdf_path, pagesize=A4)
         styles = getSampleStyleSheet()
-        # Definiamo uno stile monospace per garantire l'uniformità delle indentazioni
-        monospace_style = ParagraphStyle('Monospace', parent=styles['Normal'], fontName='Courier', fontSize=10, leading=12)
-        story = []
-        
-        # Imposta il numero massimo di caratteri per riga (questo valore può essere adattato)
+        monospace_style = ParagraphStyle(
+            'Monospace',
+            parent=styles['Normal'],
+            fontName='Courier',
+            fontSize=10,
+            leading=12
+        )
         max_char_width = 75
         
+        # Imposta l'altezza disponibile in una pagina. 
+        # Si assume che i margini di default siano 72 pt in alto e 72 pt in basso.
+        available_height = A4[1] - 144
+        
+        story = []
+        # Per ciascun file _mix.txt, costruiamo il blocco
         for file_name in sorted(os.listdir(output_directory)):
             if file_name.endswith("_mix.txt"):
                 file_path = os.path.join(output_directory, file_name)
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
-                # Applica il wrapping per evitare il troncamento delle righe
                 wrapped_content = wrap_preserve_indent(content, max_char_width)
-                story.append(Preformatted(wrapped_content, monospace_style))
-                story.append(PageBreak())
-                # Aggiunge il flowable per forzare una pagina vuota se necessario
-                story.append(BlankPageIfNeeded())
+                # Rimuovi righe vuote iniziali e finali
+                lines = [line for line in wrapped_content.splitlines() if line.strip() != ""]
+                cleaned_content = "\n".join(lines)
+                num_lines = len(lines)
+                block_height = num_lines * monospace_style.leading
+                pages = block_height // available_height
+                if block_height % available_height > 0:
+                    pages += 1
+                extra_space = 0
+                if pages % 2 != 0:
+                    remainder = block_height % available_height
+                    extra_space = available_height - remainder if remainder > 0 else available_height
+                block_flowables = []
+                block_flowables.append(Preformatted(cleaned_content, monospace_style))
+                if extra_space > 0:
+                    block_flowables.append(Spacer(1, extra_space))
+                block_flowables.append(PageBreak())
+                story.append(KeepTogether(block_flowables))
+
+        final_doc = SimpleDocTemplate(final_pdf_path, pagesize=A4)
+        final_doc.build(story)
         
-        doc.build(story)
-        report_text.insert("end", f"Merge completato. File PDF creato: {merged_pdf_path}\n")
+        report_text.insert("end", f"Merge completato. File PDF finale creato: {final_pdf_path}\n")
+        report_text.see("end")
     except Exception as e:
         report_text.insert("end", f"Errore durante il merge dei file in PDF: {str(e)}\n")
+        report_text.see("end")

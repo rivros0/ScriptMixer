@@ -22,7 +22,7 @@ def trace_unsaved(*args):
 # Creazione della finestra principale
 root = tk.Tk()
 root.title("Ninei - Smixer_v6")
-root.geometry("1024x768")
+root.geometry("1280x1024")
 
 # Configurazione della grid principale
 root.columnconfigure(3, weight=1)
