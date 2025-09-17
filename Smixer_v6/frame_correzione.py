@@ -12,28 +12,36 @@ import similarity
 def create_frame_correzione(root, global_config):
     frame_correzione = tk.Frame(root, bg="lightgreen")
 
-    # Variabili di controllo
-    include_prompt_var = tk.BooleanVar(value=True)
-    include_subdir_var = tk.BooleanVar(value=True)
-
-    # Prompt
+    # === Intro === #
     lbl_prompt = tk.Label(frame_correzione, text="INTRO:", bg="lightgreen")
     lbl_prompt.grid(row=0, column=0, sticky="w", padx=10, pady=5)
 
     entry_prompt = tk.Text(frame_correzione, width=80, height=2)
+    entry_prompt.insert("1.0", global_config.get("intro_text", tk.StringVar()).get())
     entry_prompt.grid(row=0, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
+    def aggiorna_intro(*args):
+        global_config["intro_text"].set(entry_prompt.get("1.0", "end-1c"))
+
+    entry_prompt.bind("<KeyRelease>", aggiorna_intro)
+
     chk_include_prompt = tk.Checkbutton(
-        frame_correzione, text="Includi Intro", variable=include_prompt_var, bg="lightgreen"
+        frame_correzione,
+        text="Includi Intro",
+        variable=global_config["include_prompt"],
+        bg="lightgreen"
     )
     chk_include_prompt.grid(row=1, column=1, sticky="w", padx=10, pady=5)
 
     chk_include_subdir = tk.Checkbutton(
-        frame_correzione, text="Includi Nome Subdir", variable=include_subdir_var, bg="lightgreen"
+        frame_correzione,
+        text="Includi Nome Subdir",
+        variable=global_config["include_subdir"],
+        bg="lightgreen"
     )
     chk_include_subdir.grid(row=1, column=2, sticky="w", padx=10, pady=5)
 
-    # Bottone Mix
+    # === Bottone Mix === #
     btn_mix = tk.Button(
         frame_correzione,
         text="Mixa",
@@ -43,20 +51,20 @@ def create_frame_correzione(root, global_config):
             entry_extension,
             tree,
             report_text,
-            include_prompt_var.get(),
-            include_subdir_var.get(),
+            global_config["include_prompt"].get(),
+            global_config["include_subdir"].get(),
         ),
     )
     btn_mix.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
 
-    # Estensione file
+    # === Estensione file === #
     lbl_extension = tk.Label(frame_correzione, text="Estensione dei file:", bg="lightgreen")
     lbl_extension.grid(row=2, column=0, sticky="w", padx=10, pady=5)
 
     entry_extension = tk.Entry(frame_correzione, textvariable=global_config["file_extension"])
     entry_extension.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
 
-    # Selezione directory
+    # === Selezione directory === #
     lbl_directory = tk.Label(frame_correzione, text="Directory non selezionata", anchor="w", bg="lightgreen")
     lbl_directory.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
@@ -70,7 +78,7 @@ def create_frame_correzione(root, global_config):
     btn_choose_directory = tk.Button(frame_correzione, text="Scegli Directory", command=scegli_directory)
     btn_choose_directory.grid(row=3, column=0, sticky="ew", padx=10, pady=5)
 
-    # Treeview
+    # === Treeview === #
     tree = ttk.Treeview(
         frame_correzione,
         columns=("subdirectory", "num_folders", "num_files", "num_extension_files", "extension_files", "stato_mix"),
@@ -88,7 +96,7 @@ def create_frame_correzione(root, global_config):
     tree.heading("extension_files", text="Elenco File Estensione")
     tree.heading("stato_mix", text="Mix")
 
-    # Funzione copia in clipboard con doppio click
+    # === Copia in clipboard con doppio click === #
     def on_tree_double_click(event):
         selected_item = tree.selection()
         if not selected_item:
@@ -112,7 +120,7 @@ def create_frame_correzione(root, global_config):
 
     tree.bind("<Double-1>", on_tree_double_click)
 
-    # Bottoni principali
+    # === Bottoni principali === #
     btn_merge_files = tk.Button(
         frame_correzione,
         text="MEGAmerge",
@@ -134,7 +142,7 @@ def create_frame_correzione(root, global_config):
     )
     btn_analyze.grid(row=5, column=2, sticky="ew", padx=10, pady=5)
 
-    # Report
+    # === Report === #
     lbl_report = tk.Label(frame_correzione, text="Report:", bg="lightgreen")
     lbl_report.grid(row=6, column=0, sticky="nw", padx=10, pady=5)
 

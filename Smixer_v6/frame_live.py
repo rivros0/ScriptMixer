@@ -101,6 +101,11 @@ def create_frame_live(root, global_config):
                         except Exception as e:
                             print(f"Errore copiando {src_file}: {e}")
 
+                # Aggiorna timestamp globale
+                global_config["last_copy_timestamp"].set(
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
+
                 # Aggiorna label ed esito
                 lbl_esito.config(text=f"Copia completata in {new_dir}", fg="green", bg="lightblue")
                 messagebox.showinfo("Copia completata", f"I file sono stati copiati in:\n{new_dir}")
