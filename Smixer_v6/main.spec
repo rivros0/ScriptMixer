@@ -3,12 +3,12 @@
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],
+    ['main.py'],                # file principale
     pathex=['.'],
     binaries=[],
     datas=[
-        ('icone/app.ico', 'icone'),   # 👈 icona exe
-        ('icone/app.png', 'icone'),   # 👈 icona GUI Tkinter
+        ('icone/app.ico', 'icone'),   # icona exe
+        ('icone/app.png', 'icone'),   # icona GUI Tkinter
     ],
     hiddenimports=[],
     hookspath=[],
@@ -30,13 +30,13 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='Smixer',               # nome exe finale
+    name='Smixer',               # nome eseguibile
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,                # niente console dietro la GUI
-    icon='icone/app.ico'          # 👈 icona exe (rimane .ico)
+    console=False,                # niente console nera
+    icon='icone/app.ico'          # icona exe
 )
