@@ -12,6 +12,10 @@ import utils
 # === Finestra principale === #
 root = tk.Tk()
 root.title("Smixer V7")
+
+# Usa la stessa icona anche per la finestra
+root.iconbitmap("icone/app.ico")
+
 root.geometry("1280x800")
 
 # Variabile per la modalità corrente
