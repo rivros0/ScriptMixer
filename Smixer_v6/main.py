@@ -60,7 +60,7 @@ def set_mode(mode):
         f.pack_forget()
     if mode == "Live":
         frame_live.pack(fill="both", expand=True)
-    elif mode == "Raccolta":
+    elif mode == "Preparazione":
         frame_preparazione.pack(fill="both", expand=True)
     elif mode == "Correzione":
         frame_correzione.pack(fill="both", expand=True)
@@ -107,7 +107,7 @@ def carica_configurazione():
             global_config["include_subdir"].set(config.get("include_subdir", True))
             global_config["last_copy_timestamp"].set(config.get("last_copy_timestamp", ""))
             mode = config.get("current_mode", "Correzione")
-            if mode in ("Live", "Raccolta", "Correzione"):
+            if mode in ("Live", "Preparazione", "Correzione"):
                 set_mode(mode)
             messagebox.showinfo("Caricamento riuscito", f"Configurazione caricata da {file_path}")
         except Exception as e:
@@ -127,7 +127,7 @@ menubar.add_cascade(label="File", menu=file_menu)
 # Menù Modalità
 mode_menu = tk.Menu(menubar, tearoff=0)
 mode_menu.add_radiobutton(label="Live", variable=current_mode, value="Live", command=lambda: set_mode("Live"))
-mode_menu.add_radiobutton(label="Raccolta", variable=current_mode, value="Raccolta", command=lambda: set_mode("Raccolta"))
+mode_menu.add_radiobutton(label="Preparazione", variable=current_mode, value="Preparazione", command=lambda: set_mode("Preparazione"))
 mode_menu.add_radiobutton(label="Correzione", variable=current_mode, value="Correzione", command=lambda: set_mode("Correzione"))
 menubar.add_cascade(label="Modalità", menu=mode_menu)
 

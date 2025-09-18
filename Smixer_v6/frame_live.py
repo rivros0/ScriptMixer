@@ -6,31 +6,23 @@ import datetime
 
 SCAN_INTERVAL = 30  # secondi
 
-
 def create_frame_live(root, global_config):
     frame = tk.Frame(root, bg="lightblue")  # sfondo azzurro
 
     # === Directory Remota === #
-    lbl_remote = tk.Label(frame, text="Directory remota:", bg="lightblue")
-    lbl_remote.grid(row=0, column=0, sticky="w", padx=5, pady=5)
-
-    entry_remote = tk.Entry(frame, width=80, textvariable=global_config["remote_directory"])
-    entry_remote.grid(row=0, column=1, padx=5, pady=5, columnspan=3)
+    tk.Label(frame, text="Directory remota:", bg="lightblue").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+    tk.Entry(frame, width=80, textvariable=global_config["remote_directory"]).grid(row=0, column=1, padx=5, pady=5, columnspan=3)
 
     def scegli_directory():
         directory = filedialog.askdirectory(title="Seleziona directory remota")
         if directory:
             global_config["remote_directory"].set(directory)
 
-    btn_choose_dir = tk.Button(frame, text="Scegli...", command=scegli_directory)
-    btn_choose_dir.grid(row=0, column=4, padx=5, pady=5)
+    tk.Button(frame, text="Scegli...", command=scegli_directory).grid(row=0, column=4, padx=5, pady=5)
 
     # === Estensione === #
-    lbl_ext = tk.Label(frame, text="Estensione file (es: .cpp):", bg="lightblue")
-    lbl_ext.grid(row=1, column=0, sticky="w", padx=5, pady=5)
-
-    entry_ext = tk.Entry(frame, width=20, textvariable=global_config["file_extension"])
-    entry_ext.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+    tk.Label(frame, text="Estensione file (es: .cpp):", bg="lightblue").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+    tk.Entry(frame, width=20, textvariable=global_config["file_extension"]).grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
     # === Pulsanti controllo + Timer === #
     btn_scan = tk.Button(frame, text="Scan", width=15)
@@ -39,10 +31,6 @@ def create_frame_live(root, global_config):
     lbl_timer = tk.Label(frame, text=f"Prossima scansione tra {SCAN_INTERVAL}s", fg="blue", bg="lightblue")
     lbl_timer.grid(row=1, column=5, padx=10, sticky="w")
 
-    btn_clear = tk.Button(frame, text="Pulisci tabella", width=15, command=lambda: tree.delete(*tree.get_children()))
-    btn_clear.grid(row=1, column=3, padx=5)
-
-    # === Tabella risultati === #
     tree = ttk.Treeview(
         frame,
         columns=("cartella", "num_file", "elenco_file", "ultima_modifica", "tempo_trascorso"),
@@ -59,19 +47,17 @@ def create_frame_live(root, global_config):
     tree.column("elenco_file", width=400)
     tree.column("ultima_modifica", width=160, anchor="center")
     tree.column("tempo_trascorso", width=140, anchor="center")
-
     tree.grid(row=2, column=0, columnspan=6, padx=10, pady=10, sticky="nsew")
 
     frame.grid_rowconfigure(2, weight=1)
     frame.grid_columnconfigure(3, weight=1)
 
-    # === Nome verifica === #
-    lbl_nome_verifica = tk.Label(frame, text="Nome verifica:", bg="lightblue")
-    lbl_nome_verifica.grid(row=3, column=0, sticky="w", padx=5)
-    entry_verifica = tk.Entry(frame, width=30, textvariable=global_config["verifica_name"])
-    entry_verifica.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+    tk.Label(frame, text="Nome verifica:", bg="lightblue").grid(row=3, column=0, sticky="w", padx=5)
+    tk.Entry(frame, width=30, textvariable=global_config["verifica_name"]).grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
-    # === Pulsante crea copia locale === #
+    lbl_esito = tk.Label(frame, text="", fg="green", bg="lightblue")
+    lbl_esito.grid(row=3, column=3, columnspan=2, sticky="w")
+
     def crea_copia():
         nome_verifica = global_config["verifica_name"].get().strip()
         directory_remota = global_config["remote_directory"].get().strip()
@@ -87,39 +73,35 @@ def create_frame_live(root, global_config):
                 new_dir = os.path.join(destinazione, new_dir_name)
                 os.makedirs(new_dir, exist_ok=True)
 
-                # Copia ricorsiva di TUTTI i file
-                for root_dir, dirs, files in os.walk(directory_remota):
-                    rel_path = os.path.relpath(root_dir, directory_remota)
-                    dest_dir = os.path.join(new_dir, rel_path)
-                    os.makedirs(dest_dir, exist_ok=True)
-                    for file in files:
-                        src_file = os.path.join(root_dir, file)
-                        dest_file = os.path.join(dest_dir, file)
-                        try:
-                            with open(src_file, "rb") as fsrc, open(dest_file, "wb") as fdst:
-                                fdst.write(fsrc.read())
-                        except Exception as e:
-                            print(f"Errore copiando {src_file}: {e}")
+                # Copia SOLO test01...test30
+                for i in range(1, 31):
+                    nome_dir = f"test{str(i).zfill(2)}"
+                    src_dir = os.path.join(directory_remota, nome_dir)
+                    dest_dir = os.path.join(new_dir, nome_dir)
+                    if os.path.isdir(src_dir):
+                        os.makedirs(dest_dir, exist_ok=True)
+                        for root_dir, dirs, files in os.walk(src_dir):
+                            rel_path = os.path.relpath(root_dir, src_dir)
+                            final_dest = os.path.join(dest_dir, rel_path)
+                            os.makedirs(final_dest, exist_ok=True)
+                            for file in files:
+                                src_file = os.path.join(root_dir, file)
+                                dest_file = os.path.join(final_dest, file)
+                                try:
+                                    with open(src_file, "rb") as fsrc, open(dest_file, "wb") as fdst:
+                                        fdst.write(fsrc.read())
+                                except Exception as e:
+                                    print(f"Errore copiando {src_file}: {e}")
 
-                # Aggiorna timestamp globale
-                global_config["last_copy_timestamp"].set(
-                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                )
-
-                # Aggiorna label ed esito
                 lbl_esito.config(text=f"Copia completata in {new_dir}", fg="green", bg="lightblue")
                 messagebox.showinfo("Copia completata", f"I file sono stati copiati in:\n{new_dir}")
-
             except Exception as e:
                 lbl_esito.config(text=f"Errore: {e}", fg="red", bg="lightblue")
 
-    btn_copy = tk.Button(frame, text="Crea copia locale", command=crea_copia)
-    btn_copy.grid(row=3, column=2, padx=5)
+    tk.Button(frame, text="Crea copia locale", command=crea_copia).grid(row=3, column=2, padx=5)
+    tk.Button(frame, text="Pulisci tabella", width=15, command=lambda: tree.delete(*tree.get_children())).grid(row=1, column=3, padx=5)
 
-    lbl_esito = tk.Label(frame, text="", fg="green", bg="lightblue")
-    lbl_esito.grid(row=3, column=3, columnspan=2, sticky="w")
-
-    # === Funzione di aggiornamento periodico con timer === #
+    # === Funzioni di aggiornamento periodico con timer (fuori da crea_copia!) === #
     countdown = {"value": SCAN_INTERVAL}
 
     def aggiorna_timer():
@@ -148,23 +130,17 @@ def create_frame_live(root, global_config):
                     ultima_dt = datetime.datetime.strptime(ultima_mod, "%Y-%m-%d %H:%M:%S")
                     diff = datetime.datetime.now() - ultima_dt
                     minuti, secondi = divmod(int(diff.total_seconds()), 60)
-                    if minuti > 0:
-                        tempo_trascorso = f"{minuti}m {secondi}s"
-                    else:
-                        tempo_trascorso = f"{secondi}s"
+                    tempo_trascorso = f"{minuti}m {secondi}s" if minuti > 0 else f"{secondi}s"
                 except Exception:
                     tempo_trascorso = "?"
-
             tree.insert("", "end", values=(nome_dir, num_file, ", ".join(files), ultima_mod, tempo_trascorso))
 
-        # reset timer
         countdown["value"] = SCAN_INTERVAL
         aggiorna_timer()
 
-    # Collega al bottone scan
     btn_scan.config(command=aggiorna_tabella)
 
-    # Avvia scansione automatica con timer
+    # Avvio automatico
     aggiorna_tabella()
 
     return frame

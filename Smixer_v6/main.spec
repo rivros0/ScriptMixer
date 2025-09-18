@@ -30,7 +30,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='Smixer',               # nome eseguibile
+    name='Smixer V7',               # nome eseguibile
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
