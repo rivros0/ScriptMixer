@@ -2,40 +2,54 @@ import os
 import json
 import sys
 import datetime
+import fnmatch
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-# === FUNZIONI DI SCANSIONE GENERICHE (LIMITATE A test01..test30) === #
+# --- helpers ---
+
+def _iter_test_dirs(base_path):
+    """Generator: test01..test30 (solo se esistono)."""
+    for i in range(1, 31):
+        name = f"test{str(i).zfill(2)}"
+        full = os.path.join(base_path, name)
+        if os.path.isdir(full):
+            yield name, full
+
+def _filter_by_root_prefix(names, root_prefix):
+    """
+    Filtra i nomi in base a un pattern glob (es. 'test*').
+    Per sicurezza, se il pattern NON inizia con 'test', non restituiamo nulla.
+    """
+    root_prefix = (root_prefix or "test*").strip()
+    if not root_prefix.lower().startswith("test"):
+        return []
+    return [n for n in names if fnmatch.fnmatch(n, root_prefix)]
+
+# === FUNZIONI DI SCANSIONE (SOLO test01..test30) === #
 
 def update_directory_listing(directory, entry_extension, report_text):
-    """Elenca i file trovati SOLO nelle cartelle test01..test30 (ricorsivo)."""
+    """Elenca file SOLO in test01..test30 (ricorsivo)."""
     report_text.delete("1.0", "end")
     file_extension = entry_extension.get().strip()
     if file_extension and not file_extension.startswith('.'):
         file_extension = f".{file_extension}"
 
-    for i in range(1, 31):
-        nome_dir = f"test{str(i).zfill(2)}"
-        base = os.path.join(directory, nome_dir)
-        if not os.path.isdir(base):
-            continue
+    for name, base in _iter_test_dirs(directory):
         for root, dirs, files in os.walk(base):
             for file in files:
                 if not file_extension or file.endswith(file_extension):
                     file_path = os.path.join(root, file)
                     report_text.insert("end", f"{file_path}\n")
 
-
 def update_subdirectories_list(selected_directory, tree, entry_extension):
-    """Popola la treeview con info SOLO per test01..test30."""
+    """Popola la treeview SOLO per test01..test30."""
     tree.delete(*tree.get_children())
-    for i in range(1, 31):
-        subdir = f"test{str(i).zfill(2)}"
-        check_directory_content(selected_directory, subdir, tree, entry_extension)
-
+    for name, _ in _iter_test_dirs(selected_directory):
+        check_directory_content(selected_directory, name, tree, entry_extension)
 
 def check_directory_content(base_directory, subdir, tree, entry_extension):
-    """Conta cartelle, file e file con estensione indicata in una sottocartella testXX."""
+    """Conta cartelle/file in una sottocartella testXX e abilita 'CopiaInClipboard' se esiste _mix.txt."""
     full_path = os.path.join(base_directory, subdir)
     num_folders = num_files = num_extension_files = 0
     extension_files = []
@@ -60,22 +74,21 @@ def check_directory_content(base_directory, subdir, tree, entry_extension):
         values=(subdir, num_folders, num_files, num_extension_files, ", ".join(extension_files), button_text)
     )
 
-# === SCANSIONE SPECIFICA PER CARTELLE TEST === #
-
-def scan_test_directories(base_path, extension=""):
+def scan_test_directories(base_path, extension="", root_prefix="test*"):
     """
-    Restituisce sempre le 30 cartelle test01..test30 (anche se mancanti o senza file).
-    Ritorna lista di tuple: (nome_cartella, numero_file, elenco_file, ultima_modifica_str_YYYY-mm-dd HH:MM:SS_o_vuoto)
+    Restituisce sempre fino alle 30 cartelle test01..test30 (se esistono),
+    filtrate per 'root_prefix' (glob, default 'test*').
+    Ritorna lista di tuple: (nome_cartella, numero_file, elenco_file, ultima_modifica_str).
     """
     risultati = []
-
     if not os.path.isdir(base_path):
         return risultati
 
-    for i in range(1, 31):
-        nome_dir = f"test{str(i).zfill(2)}"
-        full_path = os.path.join(base_path, nome_dir)
+    names = [name for name, _ in _iter_test_dirs(base_path)]
+    names = _filter_by_root_prefix(names, root_prefix)
 
+    for name in names:
+        full_path = os.path.join(base_path, name)
         tutti_file = []
         if os.path.isdir(full_path):
             for root_dir, dirs, files in os.walk(full_path):
@@ -91,12 +104,10 @@ def scan_test_directories(base_path, extension=""):
             ultima_mod_time = max(os.path.getmtime(f) for f in tutti_file)
             ultima_mod = datetime.datetime.fromtimestamp(ultima_mod_time).strftime("%Y-%m-%d %H:%M:%S")
 
-        risultati.append((nome_dir, num_file, nomi_file, ultima_mod))
-
+        risultati.append((name, num_file, nomi_file, ultima_mod))
     return risultati
 
-# === FUNZIONI PER CONFIGURAZIONE === #
-
+# === Salva/Carica config: invariati rispetto alla tua base === #
 def salva_configurazione(config):
     file_path = filedialog.asksaveasfilename(
         defaultextension=".json",
@@ -124,20 +135,51 @@ def carica_configurazione():
             messagebox.showerror("Errore", f"Errore nel caricamento: {e}")
     return None
 
-# === FUNZIONE APERTURA DIRECTORY === #
-
 def open_selected_directory(lbl_directory):
     selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
     if os.path.exists(selected_directory):
         try:
-            if os.name == 'nt':  # Windows
+            if os.name == 'nt':
                 os.startfile(selected_directory)
             elif os.name == 'posix':
-                if sys.platform == 'darwin':  # macOS
+                if sys.platform == 'darwin':
                     os.system(f'open "{selected_directory}"')
-                else:  # Linux
+                else:
                     os.system(f'xdg-open "{selected_directory}"')
         except Exception as e:
             messagebox.showerror("Errore", f"Non è stato possibile aprire la directory:\n{str(e)}")
     else:
         messagebox.showwarning("Attenzione", "Nessuna directory valida selezionata.")
+
+# ----- Calcolo linee di codice (per Live) -----
+
+def _count_lines_in_file(file_path: str) -> int:
+    """Conta le linee di un file di testo in modo robusto."""
+    try:
+        # Lettura testuale con fallback sugli errori
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            return sum(1 for _ in f)
+    except Exception:
+        return 0
+
+def _total_loc_in_dir(full_path: str, extension: str = "") -> int:
+    """Somma le linee di tutti i file (eventualmente filtrati per estensione) nella dir."""
+    total = 0
+    for root_dir, _, files in os.walk(full_path):
+        for f in files:
+            if not extension or f.endswith(extension):
+                total += _count_lines_in_file(os.path.join(root_dir, f))
+    return total
+
+def scan_test_directories_with_loc(base_path, extension: str = "", root_prefix: str = "test*"):
+    """
+    Come scan_test_directories ma aggiunge il campo 'total_loc' (linee totali).
+    Ritorna: (name, num_file, nomi_file, ultima_mod, total_loc)
+    """
+    risultati_base = scan_test_directories(base_path, extension=extension, root_prefix=root_prefix)
+    risultati = []
+    for (name, num_file, nomi_file, ultima_mod) in risultati_base:
+        full_path = os.path.join(base_path, name)
+        total_loc = _total_loc_in_dir(full_path, extension=extension)
+        risultati.append((name, num_file, nomi_file, ultima_mod, total_loc))
+    return risultati

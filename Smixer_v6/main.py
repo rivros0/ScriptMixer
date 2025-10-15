@@ -4,38 +4,36 @@ import json
 import os
 import sys
 
-# funzione per gestire le risorse con PyInstaller
 def resource_path(relative_path):
-    """ Restituisce il percorso assoluto della risorsa,
-        compatibile con PyInstaller (cartella temporanea _MEIPASS).
-    """
+    """Gestisce il percorso delle risorse anche in eseguibili PyInstaller."""
     try:
-        base_path = sys._MEIPASS
+        base_path = sys._MEIPASS  # type: ignore[attr-defined]
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-# Import dei frame
+# Import dei frame (usano global_config)
 from frame_live import create_frame_live
 from frame_preparazione import create_frame_preparazione
 from frame_correzione import create_frame_correzione
 
-# === Finestra principale === #
+# ---- App ----
 root = tk.Tk()
 root.title("Smixer V7")
 
-# 👇 Usa PNG per l’icona della GUI (più stabile di .ico con Tkinter)
+# Icona (se disponibile)
 try:
     icon_path = resource_path("icone/app.png")
-    icon = tk.PhotoImage(file=icon_path)
-    root.iconphoto(True, icon)
+    if os.path.exists(icon_path):
+        icon = tk.PhotoImage(file=icon_path)
+        root.iconphoto(True, icon)
 except Exception as e:
-    print(f"Impossibile caricare l'icona PNG: {e}")
+    print(f"Impossibile caricare l'icona: {e}")
 
 root.geometry("1280x800")
 
-# === Variabili globali === #
-current_mode = tk.StringVar(value="Correzione")
+# Stato globale condiviso
+current_mode = tk.StringVar(value="Preparazione")  # Avvio su Preparazione
 
 global_config = {
     "remote_directory": tk.StringVar(),
@@ -45,27 +43,29 @@ global_config = {
     "intro_text": tk.StringVar(value=""),
     "include_prompt": tk.BooleanVar(value=True),
     "include_subdir": tk.BooleanVar(value=True),
-    "last_copy_timestamp": tk.StringVar(value="")
+    "last_copy_timestamp": tk.StringVar(value=""),
+    # Radice/pattern cartelle (di default: test*)
+    "root_prefix": tk.StringVar(value="test*"),
 }
 
-# === Creazione dei frame === #
-frame_live = create_frame_live(root, global_config)
+# --- CREAZIONE FRAME NELL’ORDINE RICHIESTO: Preparazione → Live → Correzione --- #
 frame_preparazione = create_frame_preparazione(root, global_config)
+frame_live = create_frame_live(root, global_config)
 frame_correzione = create_frame_correzione(root, global_config)
 
-# === Cambio modalità === #
-def set_mode(mode):
+# --- Gestione cambio modalità --- #
+def set_mode(mode: str):
     current_mode.set(mode)
-    for f in (frame_live, frame_preparazione, frame_correzione):
+    for f in (frame_preparazione, frame_live, frame_correzione):
         f.pack_forget()
-    if mode == "Live":
-        frame_live.pack(fill="both", expand=True)
-    elif mode == "Preparazione":
+    if mode == "Preparazione":
         frame_preparazione.pack(fill="both", expand=True)
+    elif mode == "Live":
+        frame_live.pack(fill="both", expand=True)
     elif mode == "Correzione":
         frame_correzione.pack(fill="both", expand=True)
 
-# === Salva / Carica configurazione === #
+# --- Salvataggio/Caricamento configurazione --- #
 def salva_configurazione():
     config = {
         "remote_directory": global_config["remote_directory"].get(),
@@ -75,7 +75,8 @@ def salva_configurazione():
         "intro_text": global_config["intro_text"].get(),
         "include_prompt": global_config["include_prompt"].get(),
         "include_subdir": global_config["include_subdir"].get(),
-        "last_copy_timestamp": global_config["last_copy_timestamp"].get()
+        "last_copy_timestamp": global_config["last_copy_timestamp"].get(),
+        "root_prefix": global_config["root_prefix"].get(),
     }
     file_path = filedialog.asksaveasfilename(
         defaultextension=".json",
@@ -106,17 +107,17 @@ def carica_configurazione():
             global_config["include_prompt"].set(config.get("include_prompt", True))
             global_config["include_subdir"].set(config.get("include_subdir", True))
             global_config["last_copy_timestamp"].set(config.get("last_copy_timestamp", ""))
-            mode = config.get("current_mode", "Correzione")
-            if mode in ("Live", "Preparazione", "Correzione"):
+            global_config["root_prefix"].set(config.get("root_prefix", "test*"))
+            mode = config.get("current_mode", "Preparazione")
+            if mode in ("Preparazione", "Live", "Correzione"):
                 set_mode(mode)
             messagebox.showinfo("Caricamento riuscito", f"Configurazione caricata da {file_path}")
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nel caricamento: {e}")
 
-# === MENU === #
+# --- Menu --- #
 menubar = tk.Menu(root)
 
-# Menù File
 file_menu = tk.Menu(menubar, tearoff=0)
 file_menu.add_command(label="Carica configurazione", command=carica_configurazione)
 file_menu.add_command(label="Salva configurazione", command=salva_configurazione)
@@ -124,18 +125,15 @@ file_menu.add_separator()
 file_menu.add_command(label="Esci", command=root.destroy)
 menubar.add_cascade(label="File", menu=file_menu)
 
-# Menù Modalità
 mode_menu = tk.Menu(menubar, tearoff=0)
-mode_menu.add_radiobutton(label="Live", variable=current_mode, value="Live", command=lambda: set_mode("Live"))
 mode_menu.add_radiobutton(label="Preparazione", variable=current_mode, value="Preparazione", command=lambda: set_mode("Preparazione"))
+mode_menu.add_radiobutton(label="Live", variable=current_mode, value="Live", command=lambda: set_mode("Live"))
 mode_menu.add_radiobutton(label="Correzione", variable=current_mode, value="Correzione", command=lambda: set_mode("Correzione"))
 menubar.add_cascade(label="Modalità", menu=mode_menu)
 
-# Applica il menu
 root.config(menu=menubar)
 
-# Mostra inizialmente la modalità Correzione
-set_mode("Correzione")
+# Avvio su Preparazione
+set_mode("Preparazione")
 
-# Avvia il mainloop
 root.mainloop()
