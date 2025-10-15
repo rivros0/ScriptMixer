@@ -1,10 +1,12 @@
 import os
+import time
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import utils
 import datetime
 
-SCAN_INTERVAL = 30  # secondi
+SCAN_INTERVAL_BASE = 30   # s tra un ciclo e il successivo (se tutto ok)
+SCAN_INTERVAL_MAX  = 120  # s massimo con backoff
 
 def create_frame_live(root, global_config):
     frame = tk.Frame(root, bg="lightblue")
@@ -20,9 +22,9 @@ def create_frame_live(root, global_config):
 
     tk.Button(frame, text="Scegli...", command=scegli_directory).grid(row=0, column=4, padx=5, pady=5)
 
-    # --- Stato: opzioni ---
-    enable_loc = tk.BooleanVar(value=True)       # casella "Conta linee"
-    enable_autoscan = tk.BooleanVar(value=True)  # casella "Auto-scan"
+    # --- Opzioni ---
+    enable_loc = tk.BooleanVar(value=True)       # Conta linee
+    enable_autoscan = tk.BooleanVar(value=True)  # Auto-scan a cicli
 
     # --- Riga 1: estensione + controlli ---
     tk.Label(frame, text="Estensione file (es: .cpp):", bg="lightblue").grid(row=1, column=0, sticky="w", padx=5, pady=5)
@@ -37,28 +39,25 @@ def create_frame_live(root, global_config):
     btn_scan = tk.Button(frame, text="Scan", width=12)
     btn_scan.grid(row=1, column=4, padx=5, pady=5)
 
-    lbl_timer = tk.Label(frame, text=f"Prossima scansione tra {SCAN_INTERVAL}s", fg="blue", bg="lightblue")
+    lbl_timer = tk.Label(frame, text=f"In attesa…", fg="blue", bg="lightblue")
     lbl_timer.grid(row=1, column=5, padx=10, sticky="w")
 
-    # --- Tabella con colonna "Linee (tot)" ---
+    # --- Tabella ---
     tree = ttk.Treeview(
         frame,
         columns=("cartella", "num_file", "linee_totali", "elenco_file", "ultima_modifica", "tempo_trascorso"),
         show="headings"
     )
-    tree.heading("cartella", text="Cartella")
-    tree.heading("num_file", text="N. File")
-    tree.heading("linee_totali", text="Linee (tot)")
-    tree.heading("elenco_file", text="File trovati")
-    tree.heading("ultima_modifica", text="Ultima modifica")
-    tree.heading("tempo_trascorso", text="Tempo trascorso")
-
-    tree.column("cartella", width=180)
-    tree.column("num_file", width=70, anchor="center")
-    tree.column("linee_totali", width=100, anchor="e")
-    tree.column("elenco_file", width=380)
-    tree.column("ultima_modifica", width=160, anchor="center")
-    tree.column("tempo_trascorso", width=120, anchor="center")
+    for col, text, w, anchor in (
+        ("cartella", "Cartella", 180, "w"),
+        ("num_file", "N. File", 70, "center"),
+        ("linee_totali", "Linee (tot)", 100, "e"),
+        ("elenco_file", "File trovati", 380, "w"),
+        ("ultima_modifica", "Ultima modifica", 160, "center"),
+        ("tempo_trascorso", "Tempo trascorso", 120, "center"),
+    ):
+        tree.heading(col, text=text)
+        tree.column(col, width=w, anchor=anchor)
     tree.grid(row=2, column=0, columnspan=6, padx=10, pady=10, sticky="nsew")
 
     frame.grid_rowconfigure(2, weight=1)
@@ -112,91 +111,207 @@ def create_frame_live(root, global_config):
 
     tk.Button(frame, text="Crea copia locale", command=crea_copia).grid(row=3, column=2, padx=5)
 
-    # --- Pulisci tabella (manuale) ---
-    #tk.Button(frame, text="Pulisci tabella", width=15, command=lambda: tree.delete(*tree.get_children())).grid(row=1, column=6, padx=5)
+    # ====== Stato per scansione progressiva ====== #
+    scan_interval = {"value": SCAN_INTERVAL_BASE}
+    failure_streak = {"value": 0}
 
-    # --- Timer / Auto-scan ---
-    countdown = {"value": SCAN_INTERVAL}
-    timer_id = {"after": None}
+    countdown = {"value": SCAN_INTERVAL_BASE}   # tempo tra cicli (quando non si sta scansionando)
+    timer_id = {"after": None}                  # singolo timer
+    tick_id = {"after": None}                   # tick 1/sec durante la scansione progressiva
+
+    scan_state = {
+        "active": False,
+        "start_time": 0.0,
+        "names": [],      # lista cartelle da elaborare
+        "index": 0,       # indice corrente
+        "path": "",       # base path
+        "ext": "",        # estensione normalizzata (.cpp ecc.)
+    }
 
     def stop_timer():
         if timer_id["after"] is not None:
-            try:
-                frame.after_cancel(timer_id["after"])
-            except Exception:
-                pass
+            try: frame.after_cancel(timer_id["after"])
+            except Exception: pass
             timer_id["after"] = None
 
-    def aggiorna_timer():
-        # Se auto-scan è disattivato, fermiamo il timer e mostriamo stato.
+    def stop_tick():
+        if tick_id["after"] is not None:
+            try: frame.after_cancel(tick_id["after"])
+            except Exception: pass
+            tick_id["after"] = None
+
+    def start_timer():
+        """(Ri)avvia il conto alla rovescia tra un ciclo e il successivo."""
+        stop_timer()
+        if not enable_autoscan.get():
+            lbl_timer.config(text="Auto-scan OFF")
+            return
+        countdown["value"] = scan_interval["value"]
+        lbl_timer.config(text=f"Prossimo ciclo tra {countdown['value']}s")
+        timer_id["after"] = frame.after(1000, countdown_tick)
+
+    def countdown_tick():
         if not enable_autoscan.get():
             stop_timer()
             lbl_timer.config(text="Auto-scan OFF")
             return
-
+        countdown["value"] -= 1
         if countdown["value"] > 0:
-            lbl_timer.config(text=f"Prossima scansione tra {countdown['value']}s")
-            countdown["value"] -= 1
-            timer_id["after"] = frame.after(1000, aggiorna_timer)
+            lbl_timer.config(text=f"Prossimo ciclo tra {countdown['value']}s")
+            timer_id["after"] = frame.after(1000, countdown_tick)
         else:
-            aggiorna_tabella()
-
-    def on_toggle_autoscan():
-        if enable_autoscan.get():
-            # (ri)avvio
-            countdown["value"] = SCAN_INTERVAL
-            aggiorna_timer()
-        else:
-            # stop immediato
             stop_timer()
-            lbl_timer.config(text="Auto-scan OFF")
+            begin_scan_cycle()
 
-    chk_autoscan.config(command=on_toggle_autoscan)
+    def begin_scan_cycle():
+        """Prepara una scansione progressiva (una cartella al secondo)."""
+        stop_timer()
+        stop_tick()
 
-    # --- Scansione tabella ---
-    def aggiorna_tabella():
-        path = global_config["remote_directory"].get().strip()
-        estensione = global_config["file_extension"].get().strip()
-        if estensione and not estensione.startswith("."):
-            estensione = "." + estensione
-
-        if not path or not os.path.isdir(path):
-            countdown["value"] = SCAN_INTERVAL
-            aggiorna_timer()
+        base = global_config["remote_directory"].get().strip()
+        if not base or not os.path.isdir(base):
+            lbl_timer.config(text="Percorso non valido")
+            if enable_autoscan.get():
+                # aumenta un po' l'intervallo e riprova
+                scan_interval["value"] = min(SCAN_INTERVAL_MAX, scan_interval["value"] + 15)
+                start_timer()
             return
 
+        ext = global_config["file_extension"].get().strip()
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+
+        # prepara elenco cartelle test presenti (senza camminare i file)
+        names = utils.list_test_dir_names(base, root_prefix="test*")
+
+        # reset tabella
         tree.delete(*tree.get_children())
+        # inserisci placeholder per stabilizzare l'UI
+        for name in names:
+            tree.insert("", "end", iid=name, values=(name, "…", "…", "…", "…", "…"))
 
-        # Solo cartelle test01..test30; se conta linee è attiva, usiamo la versione con LOC
-        prefix = "test*"
-        if enable_loc.get():
-            risultati = utils.scan_test_directories_with_loc(path, estensione, root_prefix=prefix)
-        else:
-            base = utils.scan_test_directories(path, estensione, root_prefix=prefix)
-            # adattiamo la forma: (name, num_file, files, ultima_mod, total_loc)
-            risultati = [(n, nf, fs, um, 0) for (n, nf, fs, um) in base]
+        scan_state.update({
+            "active": True,
+            "start_time": time.time(),
+            "names": names,
+            "index": 0,
+            "path": base,
+            "ext": ext,
+        })
+        lbl_timer.config(text=f"Scansione in corso… (0/{len(names)})")
+        process_next_dir()  # parte subito la prima
 
-        import datetime as _dt
-        for nome_dir, num_file, files, ultima_mod, total_loc in risultati:
+    def process_next_dir():
+        """Elabora una cartella e pianifica la successiva tra 1 secondo."""
+        stop_tick()  # evita doppi tick
+        if not scan_state["active"]:
+            return
+
+        names = scan_state["names"]
+        i = scan_state["index"]
+        total = len(names)
+
+        # Fine?
+        if i >= total:
+            end_scan_cycle()
+            return
+
+        base = scan_state["path"]
+        ext  = scan_state["ext"]
+        name = names[i]
+
+        try:
+            (nm, num_file, files, ultima_mod, total_loc) = utils.dir_summary(
+                base, name, extension=ext, with_loc=bool(enable_loc.get())
+            )
+
+            # calcolo tempo trascorso dall'ultima mod
+            import datetime as _dt
             tempo_trascorso = ""
             if ultima_mod:
                 try:
                     ultima_dt = _dt.datetime.strptime(ultima_mod, "%Y-%m-%d %H:%M:%S")
-                    diff = _dt.datetime.now() - ultima_dt
-                    minuti, secondi = divmod(int(diff.total_seconds()), 60)
-                    tempo_trascorso = f"{minuti}m {secondi}s" if minuti > 0 else f"{secondi}s"
+                    diff = utils.now_ts() - ultima_dt
+                    m, s = divmod(int(diff.total_seconds()), 60)
+                    tempo_trascorso = f"{m}m {s}s" if m > 0 else f"{s}s"
                 except Exception:
                     tempo_trascorso = "?"
-            tree.insert(
-                "", "end",
-                values=(nome_dir, num_file, (total_loc if enable_loc.get() else "–"), ", ".join(files), ultima_mod, tempo_trascorso)
+
+            # aggiorna/crea riga
+            values = (
+                nm,
+                num_file,
+                (total_loc if enable_loc.get() else "–"),
+                ", ".join(files),
+                ultima_mod,
+                tempo_trascorso
             )
+            if tree.exists(nm):
+                tree.item(nm, values=values)
+            else:
+                tree.insert("", "end", iid=nm, values=values)
 
-        countdown["value"] = SCAN_INTERVAL
-        aggiorna_timer()
+        except Exception as e:
+            # in caso di errore, mostra qualcosa e continua
+            if tree.exists(name):
+                tree.item(name, values=(name, "ERR", "–", "(errore lettura)", "", ""))
+            else:
+                tree.insert("", "end", iid=name, values=(name, "ERR", "–", "(errore lettura)", "", ""))
 
-    btn_scan.config(command=aggiorna_tabella)
+        # avanzamento
+        scan_state["index"] = i + 1
+        lbl_timer.config(text=f"Scansione in corso… ({scan_state['index']}/{total})")
 
-    # avvio iniziale
-    aggiorna_tabella()
+        # pianifica la prossima cartella tra 1 secondo, se ancora attivo
+        if scan_state["active"]:
+            tick_id["after"] = frame.after(1000, process_next_dir)
+
+    def end_scan_cycle():
+        """Chiusura del ciclo progressivo + backoff + (eventuale) avvio countdown prossimo ciclo."""
+        stop_tick()
+        scan_state["active"] = False
+        duration = time.time() - scan_state["start_time"]
+
+        # Backoff semplice: se >5s o ci sono state eccezioni visibili (difficile da contare qui),
+        # aumentiamo l'intervallo, altrimenti riduciamo gradualmente verso la base.
+        if duration > 5 * max(1, len(scan_state["names"])):  # durata media >5s/cartella: rete pesante
+            scan_interval["value"] = min(SCAN_INTERVAL_MAX, int(scan_interval["value"] * 1.5))
+        else:
+            # alleggeriamo fino alla base
+            if scan_interval["value"] > SCAN_INTERVAL_BASE:
+                scan_interval["value"] = max(SCAN_INTERVAL_BASE, scan_interval["value"] - 15)
+
+        lbl_timer.config(text=f"Ciclo completato in {int(duration)}s • Prossimo in {scan_interval['value']}s")
+
+        if enable_autoscan.get():
+            start_timer()
+        else:
+            lbl_timer.config(text="Auto-scan OFF")
+
+    # --- Handlers UI ---
+    def on_toggle_autoscan():
+        if enable_autoscan.get():
+            # se si riattiva mentre una scansione è già in corso, non fare nulla: prosegue a goccia
+            if not scan_state["active"]:
+                start_timer()
+        else:
+            # disattiva tutto
+            stop_timer()
+            stop_tick()
+            scan_state["active"] = False
+            lbl_timer.config(text="Auto-scan OFF")
+
+    chk_autoscan.config(command=on_toggle_autoscan)
+
+    def manual_scan():
+        """Avvia subito un ciclo progressivo; interrompe timer/eventuali cicli in corso."""
+        stop_timer()
+        stop_tick()
+        scan_state["active"] = False
+        begin_scan_cycle()
+
+    btn_scan.config(command=manual_scan)
+
+    # avvio iniziale: parte un ciclo subito, poi countdown in base alle impostazioni
+    manual_scan()
     return frame

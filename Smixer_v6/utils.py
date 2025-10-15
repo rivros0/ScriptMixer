@@ -5,6 +5,8 @@ import datetime
 import fnmatch
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import fnmatch
+import datetime as _dt
 
 # --- helpers ---
 
@@ -183,3 +185,51 @@ def scan_test_directories_with_loc(base_path, extension: str = "", root_prefix: 
         total_loc = _total_loc_in_dir(full_path, extension=extension)
         risultati.append((name, num_file, nomi_file, ultima_mod, total_loc))
     return risultati
+
+
+def list_test_dir_names(base_path: str, root_prefix: str = "test*"):
+    """Ritorna la lista delle sottocartelle testXX presenti (filtrate per glob, di default test*)."""
+    if not os.path.isdir(base_path):
+        return []
+    names = []
+    for i in range(1, 31):
+        name = f"test{str(i).zfill(2)}"
+        if fnmatch.fnmatch(name, root_prefix):
+            full = os.path.join(base_path, name)
+            if os.path.isdir(full):
+                names.append(name)
+    return names
+
+def dir_summary(base_path: str, name: str, extension: str = "", with_loc: bool = True):
+    """
+    Calcola i dati per UNA sola cartella testXX:
+    ritorna (name, num_file, nomi_file, ultima_mod_str, total_loc)
+    """
+    full_path = os.path.join(base_path, name)
+    tutti_file = []
+    total_loc = 0
+    if os.path.isdir(full_path):
+        for root_dir, dirs, files in os.walk(full_path):
+            for f in files:
+                if not extension or f.endswith(extension):
+                    fp = os.path.join(root_dir, f)
+                    tutti_file.append(fp)
+                    if with_loc:
+                        # riusa la funzione robusta già presente
+                        try:
+                            total_loc += _count_lines_in_file(fp)
+                        except Exception:
+                            pass
+    num_file = len(tutti_file)
+    nomi_file = [os.path.basename(f) for f in tutti_file]
+    ultima_mod = ""
+    if tutti_file:
+        try:
+            t = max(os.path.getmtime(f) for f in tutti_file)
+            ultima_mod = _dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            ultima_mod = ""
+    return (name, num_file, nomi_file, ultima_mod, total_loc)
+
+def now_ts():
+    return _dt.datetime.now()
