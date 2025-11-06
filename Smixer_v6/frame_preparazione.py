@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import tkinter as tk
 from tkinter import filedialog, messagebox, Scrollbar
 
@@ -14,12 +17,13 @@ def create_frame_preparazione(root, global_config):
       - scegliere la directory remota che contiene le cartelle test01..test30
       - scansionare lo stato delle cartelle test
       - creare una copia locale (su Desktop, in una cartella timestampata)
+      - distribuire un file in tutte le cartelle test
       - opzionalmente cancellare le cartelle test sulla directory remota
 
     Usa:
       - global_config["remote_directory"]     : directory remota (server)
       - global_config["selected_directory"]   : ultima directory locale creata
-      - report_text                          : log degli eventi
+      - report_text                           : log degli eventi
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
@@ -38,7 +42,7 @@ def create_frame_preparazione(root, global_config):
         width=80,
         textvariable=global_config["remote_directory"],
     )
-    entry_remote.grid(row=0, column=1, columnspan=2, sticky="ew", padx=8, pady=8)
+    entry_remote.grid(row=0, column=1, columnspan=3, sticky="ew", padx=8, pady=8)
 
     def choose_remote_dir():
         d = filedialog.askdirectory(
@@ -53,7 +57,7 @@ def create_frame_preparazione(root, global_config):
         command=choose_remote_dir,
         bg="white",
     )
-    btn_choose_remote.grid(row=0, column=3, padx=8, pady=8, sticky="ew")
+    btn_choose_remote.grid(row=0, column=4, padx=8, pady=8, sticky="ew")
 
     # ======================================================================
     #  RIGA 1: PULSANTI OPERATIVI
@@ -87,7 +91,7 @@ def create_frame_preparazione(root, global_config):
         anchor="w",
         bg=YELLOW_BG,
     )
-    lbl_local_dir.grid(row=2, column=0, columnspan=4, sticky="ew", padx=8, pady=4)
+    lbl_local_dir.grid(row=2, column=0, columnspan=5, sticky="ew", padx=8, pady=4)
 
     def do_create_local_copy():
         """
@@ -135,6 +139,61 @@ def create_frame_preparazione(root, global_config):
     )
     btn_create_copy.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
 
+    def do_distribute_file():
+        """
+        Chiede un file e lo copia in tutte le cartelle test01..test30
+        presenti nella directory remota.
+        """
+        remote_dir = global_config["remote_directory"].get().strip()
+        if not remote_dir:
+            messagebox.showwarning(
+                "Attenzione",
+                "Imposta prima la directory remota (contente le cartelle testXX).",
+            )
+            return
+
+        file_path = filedialog.askopenfilename(
+            title="Seleziona il file da distribuire nelle cartelle test"
+        )
+        if not file_path:
+            return
+
+        file_name = os.path.basename(file_path)
+        copied_count = 0
+
+        for folder_name, folder_path in data_handler._iter_test_folders(remote_dir):
+            if os.path.isdir(folder_path):
+                dest_path = os.path.join(folder_path, file_name)
+                try:
+                    shutil.copy2(file_path, dest_path)
+                    copied_count += 1
+                except Exception as e:
+                    report_text.insert(
+                        "end",
+                        f"Errore nel copiare {file_name} in {folder_name}: {e}\n",
+                    )
+
+        if copied_count == 0:
+            msg = (
+                "Nessuna cartella test01–test30 trovata nella directory remota.\n"
+                "File NON distribuito."
+            )
+        else:
+            msg = (
+                f"File '{file_name}' distribuito in {copied_count} cartelle test.\n"
+            )
+
+        report_text.insert("end", msg + "\n")
+        report_text.see("end")
+
+    btn_distribute = tk.Button(
+        frame,
+        text="Distribuisci file nelle cartelle test",
+        command=do_distribute_file,
+        bg="white",
+    )
+    btn_distribute.grid(row=1, column=2, padx=8, pady=4, sticky="ew")
+
     def do_clear_remote():
         """
         Cancella i contenuti delle cartelle test01..test30 sulla directory remota.
@@ -154,9 +213,12 @@ def create_frame_preparazione(root, global_config):
         frame,
         text="Cancella cartelle test remote",
         command=do_clear_remote,
-        bg="white",
+        bg="red",
+        fg="white",
+        activebackground="#ff6666",
+        activeforeground="white",
     )
-    btn_clear_remote.grid(row=1, column=2, padx=8, pady=4, sticky="ew")
+    btn_clear_remote.grid(row=1, column=3, padx=8, pady=4, sticky="ew")
 
     def open_remote_dir():
         """
@@ -177,7 +239,7 @@ def create_frame_preparazione(root, global_config):
         command=open_remote_dir,
         bg="white",
     )
-    btn_open_remote.grid(row=1, column=3, padx=8, pady=4, sticky="ew")
+    btn_open_remote.grid(row=1, column=4, padx=8, pady=4, sticky="ew")
 
     # ======================================================================
     #  LOG / REPORT
@@ -194,20 +256,21 @@ def create_frame_preparazione(root, global_config):
     report_text.grid(
         row=4,
         column=0,
-        columnspan=4,
+        columnspan=5,
         sticky="nsew",
         padx=8,
         pady=4,
     )
 
     scrollbar = Scrollbar(frame, orient="vertical", command=report_text.yview)
-    scrollbar.grid(row=4, column=4, sticky="ns", pady=4)
+    scrollbar.grid(row=4, column=5, sticky="ns", pady=4)
     report_text.config(yscrollcommand=scrollbar.set)
 
     # Rende il log espandibile
     frame.rowconfigure(4, weight=1)
     frame.columnconfigure(1, weight=1)
     frame.columnconfigure(2, weight=1)
+    frame.columnconfigure(3, weight=1)
 
     # Messaggio iniziale nel log
     report_text.insert(
@@ -216,6 +279,7 @@ def create_frame_preparazione(root, global_config):
         "- Imposta la directory remota con le cartelle test01..test30.\n"
         "- Usa 'Scansiona cartelle test' per verificare la presenza dei file.\n"
         "- Usa 'Crea copia locale (Desktop)' per creare una copia delle cartelle test.\n"
+        "- Usa 'Distribuisci file nelle cartelle test' per copiare un file in tutte le cartelle test.\n"
         "- Dopo la copia, la directory locale verrà impostata come directory di lavoro\n"
         "  per le schede Correzione ed Export.\n"
         "- Usa 'Cancella cartelle test remote' SOLO dopo aver verificato di avere la copia locale.\n",
