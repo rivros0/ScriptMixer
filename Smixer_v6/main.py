@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
+import sys
 import json
 import os
 
@@ -12,8 +13,17 @@ from frame_export import create_frame_export
 
 # === FINESTRA PRINCIPALE === #
 root = tk.Tk()
-root.title("Smixer / Gestione Elaborati V0.8")
+root.title("SMX V0.81 / Gestione Elaborati ")
 root.geometry("1280x800")
+
+# Percorso all'icona (funziona anche dentro l'exe)
+base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+icon_path = os.path.join(base_path, "icone", "app.ico")
+
+if os.path.exists(icon_path):
+    root.iconbitmap(icon_path)
+else:
+    print(f"⚠️ Icona non trovata: {icon_path}")
 
 # Modalità corrente (default: Preparazione)
 current_mode = tk.StringVar(value="Preparazione")

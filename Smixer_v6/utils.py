@@ -5,17 +5,58 @@ import data_handler  # per riutilizzare la logica su test01..test30
 
 
 # =============================================================================
+#  PARSING ESTENSIONI
+# =============================================================================
+
+def parse_extensions(ext_string: str):
+    """
+    Converte una stringa di estensioni in una lista normalizzata.
+
+    Esempi accettati:
+      - ".cpp"
+      - "cpp"
+      - ".php, .html, .css"
+      - "php html css"
+      - "php,html css"
+
+    Restituisce una lista di estensioni in minuscolo, con il punto iniziale:
+      [".php", ".html", ".css"]
+    """
+    if not ext_string:
+        return []
+
+    work = ext_string.replace(";", ",")  # giusto in caso…
+
+    tokens = []
+    for chunk in work.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        for part in chunk.split():
+            part = part.strip()
+            if not part:
+                continue
+            if not part.startswith("."):
+                part = "." + part
+            tokens.append(part.lower())
+
+    seen = set()
+    result = []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
+
+
+# =============================================================================
 #  UTILITÀ PER LA SCHEDA "CORREZIONE"
 # =============================================================================
 
 def update_directory_listing(directory, entry_extension, report_text):
     """
     Popola la text-area di report con l'elenco dei file trovati nella directory
-    (ricerca ricorsiva), filtrando per estensione.
-
-    - directory: path di partenza
-    - entry_extension: widget (Entry / StringVar) con l'estensione (.cpp, .java, ...)
-    - report_text: widget Text dove scrivere la lista dei file
+    (ricerca ricorsiva), filtrando per UNA O PIÙ estensioni.
     """
     report_text.delete("1.0", "end")
 
@@ -23,19 +64,23 @@ def update_directory_listing(directory, entry_extension, report_text):
         report_text.insert("end", "Directory non valida o inesistente.\n")
         return
 
-    file_extension = entry_extension.get().strip() if hasattr(entry_extension, "get") else str(entry_extension).strip()
-    if file_extension != "" and not file_extension.startswith("."):
-        file_extension = f".{file_extension}"
+    ext_string = entry_extension.get().strip() if hasattr(entry_extension, "get") else str(entry_extension).strip()
+    exts = parse_extensions(ext_string)
 
     report_text.insert("end", f"Scansione di:\n  {directory}\n")
-    if file_extension:
-        report_text.insert("end", f"Filtro estensione: {file_extension}\n\n")
+    if exts:
+        report_text.insert("end", f"Filtri estensioni: {', '.join(exts)}\n\n")
     else:
         report_text.insert("end", "Nessun filtro di estensione applicato.\n\n")
 
     for root, _dirs, files in os.walk(directory):
         for file in files:
-            if file_extension == "" or file.endswith(file_extension):
+            if not exts:
+                match = True
+            else:
+                fname = file.lower()
+                match = any(fname.endswith(e) for e in exts)
+            if match:
                 file_path = os.path.join(root, file)
                 report_text.insert("end", f"{file_path}\n")
 
@@ -47,8 +92,8 @@ def count_directory_content(directory, entry_extension):
     Conta:
       - quante sottocartelle
       - quanti file totali
-      - quanti file con la specifica estensione
-      - l'elenco dei file con quella estensione
+      - quanti file con le estensioni selezionate
+      - l'elenco dei file con quelle estensioni
 
     Restituisce: (num_folders, num_files, num_extension_files, extension_files)
     """
@@ -57,17 +102,20 @@ def count_directory_content(directory, entry_extension):
     num_extension_files = 0
     extension_files = []
 
-    ext = entry_extension.get().strip() if hasattr(entry_extension, "get") else str(entry_extension).strip()
-    if ext and not ext.startswith("."):
-        ext = "." + ext
+    ext_string = entry_extension.get().strip() if hasattr(entry_extension, "get") else str(entry_extension).strip()
+    exts = parse_extensions(ext_string)
 
     for _root, dirs, files in os.walk(directory):
         num_folders += len(dirs)
         num_files += len(files)
-        if ext:
-            current_extension_files = [f for f in files if f.endswith(ext)]
+
+        if exts:
+            current_extension_files = [
+                f for f in files if any(f.lower().endswith(e) for e in exts)
+            ]
         else:
             current_extension_files = list(files)
+
         num_extension_files += len(current_extension_files)
         extension_files += current_extension_files
 
@@ -77,16 +125,15 @@ def count_directory_content(directory, entry_extension):
 def check_directory_content(base_directory, subdir, tree, entry_extension):
     """
     Calcola le statistiche sulla sottocartella `subdir` e inserisce una riga
-    nella Treeview.
-
-    La Treeview nella scheda Correzione si aspetta 5 colonne:
-      (subdirectory, num_folders, num_files, num_extension_files, extension_files)
+    nella Treeview (Correzione / Preparazione).
     """
     full_path = os.path.join(base_directory, subdir)
     num_folders, num_files, num_extension_files, extension_files = count_directory_content(
         full_path, entry_extension
     )
 
+    # NOTA: ci aspettiamo che l'albero abbia anche una colonna "mix_file":
+    # per le schede che non la usano mettiamo stringa vuota.
     tree.insert(
         "",
         "end",
@@ -96,6 +143,7 @@ def check_directory_content(base_directory, subdir, tree, entry_extension):
             num_files,
             num_extension_files,
             ", ".join(extension_files),
+            "",
         ),
     )
 
@@ -126,31 +174,58 @@ def update_subdirectories_list(selected_directory, tree, entry_extension):
 #  UTILITÀ PER LA SCHEDA "LIVE"
 # =============================================================================
 
+def _format_age(last_mod_timestamp: float | None) -> str:
+    """
+    Converte un timestamp di ultima modifica in una stringa del tipo:
+      - "2g 3h"
+      - "3h 15m"
+      - "12m"
+      - "<1m"
+    """
+    if last_mod_timestamp is None:
+        return "-"
+
+    dt = datetime.fromtimestamp(last_mod_timestamp)
+    now = datetime.now()
+    delta = now - dt
+
+    days = delta.days
+    seconds = delta.seconds
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+
+    if days > 0:
+        return f"{days}g {hours}h"
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    if minutes > 0:
+        return f"{minutes}m"
+    return "<1m"
+
+
 def scan_remote_directory(remote_directory, extension, count_lines=False):
     """
     Scansiona la directory remota alla ricerca delle sole cartelle test01..test30
     (come definito in data_handler), e per ciascuna restituisce:
 
-      (nome_cartella, num_file_con_estensione, num_righe_totali, elenco_file, ultima_modifica_str)
+      (nome_cartella,
+       num_file_con_estensione,
+       num_righe_totali,
+       elenco_file,
+       ultima_modifica_str,
+       eta_str)
 
-    - remote_directory: path della radice che contiene le cartelle testXX
-    - extension: estensione da filtrare (es. ".cpp"); se vuota, conta tutti i file
-    - count_lines: se True, somma il numero di righe dei file trovati
-
-    Ritorna una lista di tuple ordinate per nome_cartella.
+    - extension può contenere UNA o PIÙ estensioni (come in parse_extensions)
     """
     results = []
 
     if not remote_directory or not os.path.isdir(remote_directory):
         return results
 
-    ext = extension.strip()
-    if ext and not ext.startswith("."):
-        ext = "." + ext
+    exts = parse_extensions(extension.strip())
 
     for folder_name, folder_path in data_handler._iter_test_folders(remote_directory):
         if not os.path.isdir(folder_path):
-            # cartella mancante: non la mostriamo nella tabella Live
             continue
 
         files_found = []
@@ -159,29 +234,33 @@ def scan_remote_directory(remote_directory, extension, count_lines=False):
 
         for root, _dirs, files in os.walk(folder_path):
             for f in files:
-                if not ext or f.endswith(ext):
-                    files_found.append(f)
-                    file_path = os.path.join(root, f)
+                if not exts:
+                    match = True
+                else:
+                    match = any(f.lower().endswith(e) for e in exts)
+                if not match:
+                    continue
 
-                    # aggiorna last_mod
-                    mtime = os.path.getmtime(file_path)
-                    if last_mod is None or mtime > last_mod:
-                        last_mod = mtime
+                files_found.append(f)
+                file_path = os.path.join(root, f)
 
-                    # conteggio righe opzionale
-                    if count_lines:
+                # aggiorna last_mod
+                mtime = os.path.getmtime(file_path)
+                if last_mod is None or mtime > last_mod:
+                    last_mod = mtime
+
+                # conteggio righe opzionale
+                if count_lines:
+                    try:
                         try:
-                            # tentiamo UTF-8, altrimenti latin-1
-                            try:
-                                with open(file_path, "r", encoding="utf-8") as fh:
-                                    lines = fh.readlines()
-                            except UnicodeDecodeError:
-                                with open(file_path, "r", encoding="latin-1", errors="replace") as fh:
-                                    lines = fh.readlines()
-                            total_lines += len(lines)
-                        except Exception:
-                            # se qualcosa va storto su un file, lo ignoriamo per il conteggio
-                            pass
+                            with open(file_path, "r", encoding="utf-8") as fh:
+                                lines = fh.readlines()
+                        except UnicodeDecodeError:
+                            with open(file_path, "r", encoding="latin-1", errors="replace") as fh:
+                                lines = fh.readlines()
+                        total_lines += len(lines)
+                    except Exception:
+                        pass
 
         num_file = len(files_found)
         files_found.sort()
@@ -191,11 +270,14 @@ def scan_remote_directory(remote_directory, extension, count_lines=False):
         else:
             last_mod_str = "-"
 
+        age_str = _format_age(last_mod)
+
         num_lines_value = total_lines if count_lines else None
 
-        results.append((folder_name, num_file, num_lines_value, files_found, last_mod_str))
+        results.append(
+            (folder_name, num_file, num_lines_value, files_found, last_mod_str, age_str)
+        )
 
-    # Ordina per nome cartella (test01, test02, ...)
     results.sort(key=lambda x: x[0])
     return results
 
@@ -204,11 +286,6 @@ def copy_test_directories(remote_directory, destination_root, nome_verifica):
     """
     Copia SOLO le cartelle test01..test30 esistenti da `remote_directory`
     dentro una nuova cartella creata sotto `destination_root`.
-
-    La nuova cartella avrà nome:
-        YYYYMMDD_HH-MM_<nome_verifica>
-
-    Restituisce una stringa di esito (da mostrare nella label della scheda Live).
     """
     nome_verifica = (nome_verifica or "").strip()
     if not nome_verifica:
@@ -220,11 +297,12 @@ def copy_test_directories(remote_directory, destination_root, nome_verifica):
     if not destination_root or not os.path.isdir(destination_root):
         return "⚠️ Directory di destinazione non valida."
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H-%M")
+    from datetime import datetime as _dt
+
+    timestamp = _dt.now().strftime("%Y%m%d_%H-%M")
     dest_base = os.path.join(destination_root, f"{timestamp}_{nome_verifica}")
     os.makedirs(dest_base, exist_ok=True)
 
-    # Riutilizziamo la logica di data_handler per copiare SOLO test01..test30
     copied = data_handler._copy_test_folders(remote_directory, dest_base, report_text=None)
 
     if not copied:
@@ -234,22 +312,12 @@ def copy_test_directories(remote_directory, destination_root, nome_verifica):
 
 
 # =============================================================================
-#  WRAPPER DI COMPATIBILITÀ (per vecchio codice che usava utils)
+#  WRAPPER DI COMPATIBILITÀ
 # =============================================================================
 
 def choose_directory(lbl_directory, update_directory_listing_func, update_subdirectories_list_func):
-    """
-    Wrapper di compatibilità: delega a data_handler.choose_directory.
-
-    Usato nelle versioni precedenti della scheda Correzione.
-    """
     data_handler.choose_directory(lbl_directory, update_directory_listing_func, update_subdirectories_list_func)
 
 
 def open_selected_directory(selected_directory):
-    """
-    Wrapper di compatibilità: delega a data_handler.open_selected_directory.
-
-    Accetta stringa, Label o StringVar, come in data_handler.
-    """
     data_handler.open_selected_directory(selected_directory)

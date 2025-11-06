@@ -3,8 +3,10 @@ import shutil
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, Scrollbar
+from tkinter import ttk
 
 import data_handler
+import utils
 
 YELLOW_BG = "#fff5cc"
 
@@ -13,17 +15,11 @@ def create_frame_preparazione(root, global_config):
     """
     Frame modalità PREPARAZIONE.
 
-    Serve per:
-      - scegliere la directory remota che contiene le cartelle test01..test30
-      - scansionare lo stato delle cartelle test
-      - creare una copia locale (su Desktop, in una cartella timestampata + nome verifica)
-      - distribuire un file in tutte le cartelle test
-      - opzionalmente cancellare le cartelle test sulla directory remota
-
-    Usa:
-      - global_config["remote_directory"]     : directory remota (server)
-      - global_config["selected_directory"]   : ultima directory locale creata
-      - global_config["verifica_name"]        : nome verifica (usato nel nome cartella)
+    - Imposta directory remota (test01..test30)
+    - Scansiona cartelle test e mostra riepilogo in tabella (sopra)
+    - Crea copia locale sul Desktop (timestamp + nome verifica)
+    - Distribuisce un file in tutte le cartelle test
+    - Cancella il contenuto delle cartelle test remote (pulsante rosso)
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
@@ -60,12 +56,71 @@ def create_frame_preparazione(root, global_config):
     btn_choose_remote.grid(row=0, column=4, padx=8, pady=8, sticky="ew")
 
     # ======================================================================
+    #  TABELLA RIEPILOGO CARTELLE TEST REMOTE (creata qui, usata più sotto)
+    # ======================================================================
+    tree_stats = ttk.Treeview(
+        frame,
+        columns=(
+            "subdirectory",
+            "num_folders",
+            "num_files",
+            "num_extension_files",
+            "extension_files",
+        ),
+        show="headings",
+    )
+    tree_stats.heading("subdirectory", text="Subdirectory")
+    tree_stats.heading("num_folders", text="Cartelle")
+    tree_stats.heading("num_files", text="File")
+    tree_stats.heading("num_extension_files", text="File con estensione")
+    tree_stats.heading("extension_files", text="Elenco file")
+
+    tree_stats.column("subdirectory", width=120, anchor="w")
+    tree_stats.column("num_folders", width=80, anchor="center")
+    tree_stats.column("num_files", width=80, anchor="center")
+    tree_stats.column("num_extension_files", width=140, anchor="center")
+    tree_stats.column("extension_files", width=420, anchor="w")
+
+    def update_remote_stats_table():
+        """
+        Aggiorna la tabella con le informazioni sulle cartelle test01..test30
+        presenti nella directory remota, usando le estensioni in global_config["file_extension"].
+        """
+        remote_dir = global_config["remote_directory"].get().strip()
+        entry_extension = global_config["file_extension"]  # StringVar
+
+        tree_stats.delete(*tree_stats.get_children())
+
+        if not remote_dir or not os.path.isdir(remote_dir):
+            return
+
+        for folder_name, folder_path in data_handler._iter_test_folders(remote_dir):
+            if not os.path.isdir(folder_path):
+                continue
+
+            num_folders, num_files, num_ext, ext_files = utils.count_directory_content(
+                folder_path, entry_extension
+            )
+
+            tree_stats.insert(
+                "",
+                "end",
+                values=(
+                    folder_name,
+                    num_folders,
+                    num_files,
+                    num_ext,
+                    ", ".join(ext_files),
+                ),
+            )
+
+    # ======================================================================
     #  RIGA 1: PULSANTI OPERATIVI
     # ======================================================================
     def do_scan_tests():
         """
-        Scansiona le cartelle test01..test30 sulla directory remota
-        e scrive il risultato nel log.
+        Scansiona le cartelle test01..test30 sulla directory remota,
+        scrive il risultato nel log e aggiorna la tabella riepilogo.
         """
         remote_dir = global_config["remote_directory"].get().strip()
         if not remote_dir:
@@ -75,6 +130,7 @@ def create_frame_preparazione(root, global_config):
             )
             return
         data_handler.scan_test_folders(remote_dir, report_text)
+        update_remote_stats_table()
 
     btn_scan = tk.Button(
         frame,
@@ -96,9 +152,7 @@ def create_frame_preparazione(root, global_config):
     def do_create_local_copy():
         """
         Crea una copia locale di test01..test30 sul Desktop in una cartella
-        timestampata + nome verifica, aggiorna il log e imposta:
-          - global_config["selected_directory"]
-          - lbl_local_dir
+        timestampata + nome verifica, aggiorna il log e imposta selected_directory.
         """
         remote_dir = global_config["remote_directory"].get().strip()
         nome_verifica = global_config["verifica_name"].get().strip()
@@ -113,16 +167,14 @@ def create_frame_preparazione(root, global_config):
         new_dir = data_handler.create_local_copy(
             remote_dir,
             report_text,
-            lbl_local_dir,           # verrà impostato a "Directory selezionata: ..."
-            lambda *_: None,         # update_directory_listing_func
-            lambda *_: None,         # update_subdirectories_list_func
+            lbl_local_dir,
+            lambda *_: None,
+            lambda *_: None,
             nome_verifica=nome_verifica,
         )
 
         if new_dir:
-            # Aggiorna la directory selezionata globale (usata da Correzione/Export)
             global_config["selected_directory"].set(new_dir)
-            # Sovrascrive il testo della label in modo più descrittivo
             lbl_local_dir.config(
                 text=f"Ultima directory locale creata: {new_dir}"
             )
@@ -199,10 +251,6 @@ def create_frame_preparazione(root, global_config):
     btn_distribute.grid(row=1, column=2, padx=8, pady=4, sticky="ew")
 
     def do_clear_remote():
-        """
-        Cancella i contenuti delle cartelle test01..test30 sulla directory remota.
-        Chiede tre conferme (gestite da data_handler.clear_test_folders).
-        """
         remote_dir = global_config["remote_directory"].get().strip()
         if not remote_dir:
             messagebox.showwarning(
@@ -225,9 +273,6 @@ def create_frame_preparazione(root, global_config):
     btn_clear_remote.grid(row=1, column=3, padx=8, pady=4, sticky="ew")
 
     def open_remote_dir():
-        """
-        Apre la directory remota nel file manager di sistema.
-        """
         remote_dir = global_config["remote_directory"].get().strip()
         if not remote_dir:
             messagebox.showwarning(
@@ -246,19 +291,31 @@ def create_frame_preparazione(root, global_config):
     btn_open_remote.grid(row=1, column=4, padx=8, pady=4, sticky="ew")
 
     # ======================================================================
-    #  LOG / REPORT
+    #  TABELLA RIEPILOGO (ORA SOPRA AL LOG)
+    # ======================================================================
+    lbl_table = tk.Label(
+        frame,
+        text="Riepilogo cartelle test (directory remota + estensioni selezionate):",
+        bg=YELLOW_BG,
+    )
+    lbl_table.grid(row=3, column=0, sticky="nw", padx=8, pady=4)
+
+    tree_stats.grid(row=4, column=0, columnspan=5, sticky="nsew", padx=8, pady=4)
+
+    # ======================================================================
+    #  LOG / REPORT (ORA SOTTO LA TABELLA)
     # ======================================================================
     lbl_report = tk.Label(frame, text="Log / Report:", bg=YELLOW_BG)
-    lbl_report.grid(row=3, column=0, sticky="nw", padx=8, pady=4)
+    lbl_report.grid(row=5, column=0, sticky="nw", padx=8, pady=4)
 
     report_text = tk.Text(
         frame,
         width=100,
-        height=15,
+        height=10,
         bg="#fffbe6",
     )
     report_text.grid(
-        row=4,
+        row=6,
         column=0,
         columnspan=5,
         sticky="nsew",
@@ -267,35 +324,36 @@ def create_frame_preparazione(root, global_config):
     )
 
     scrollbar = Scrollbar(frame, orient="vertical", command=report_text.yview)
-    scrollbar.grid(row=4, column=5, sticky="ns", pady=4)
+    scrollbar.grid(row=6, column=5, sticky="ns", pady=4)
     report_text.config(yscrollcommand=scrollbar.set)
 
-    # Rende il log espandibile
-    frame.rowconfigure(4, weight=1)
+    # ======================================================================
+    #  LAYOUT
+    # ======================================================================
+    frame.rowconfigure(4, weight=1)  # tabella
+    frame.rowconfigure(6, weight=1)  # log
     frame.columnconfigure(1, weight=1)
     frame.columnconfigure(2, weight=1)
     frame.columnconfigure(3, weight=1)
 
-    # Messaggio iniziale nel log — stile coerente con Correzione/Live
+    # Messaggio iniziale nel log (ora sotto)
     report_text.insert(
         "end",
         "Modalità Preparazione pronta.\n"
         "- Imposta la directory remota con le cartelle test01..test30.\n"
         "- Usa 'Scansiona cartelle test' per verificare la presenza dei file.\n"
-        "- Usa 'Crea copia locale (Desktop)' per creare una copia delle cartelle test:\n"
-        "    → la cartella sul Desktop avrà nome: timestamp + nome verifica.\n"
+        "- La tabella sopra mostra, per ogni test, il conteggio di cartelle/file\n"
+        "  e i file che corrispondono alle estensioni impostate (campo estensioni).\n"
+        "- Usa 'Crea copia locale (Desktop)' per creare una copia delle cartelle test.\n"
         "- Usa 'Distribuisci file nelle cartelle test' per copiare un file in tutte le cartelle test.\n"
-        "- Dopo la copia, la directory locale verrà impostata come directory di lavoro\n"
-        "  per le schede Correzione ed Export.\n"
         "- Usa 'Cancella cartelle test remote' SOLO dopo aver verificato di avere la copia locale.\n",
     )
     report_text.see("end")
 
-    # Se abbiamo già una directory remota in config, aggiornala nell'entry
+    # Stato iniziale
     if global_config["remote_directory"].get().strip():
         entry_remote.icursor("end")
 
-    # Se abbiamo già una directory selezionata (locale), riflettila nella label
     if global_config["selected_directory"].get().strip():
         lbl_local_dir.config(
             text=f"Ultima directory locale creata: {global_config['selected_directory'].get().strip()}"
