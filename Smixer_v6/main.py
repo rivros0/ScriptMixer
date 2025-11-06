@@ -19,7 +19,7 @@ from frame_correzione import create_frame_correzione
 
 # ---- App ----
 root = tk.Tk()
-root.title("Smixer V7")
+root.title("Smixer V0.8")
 
 # Icona (se disponibile)
 try:
