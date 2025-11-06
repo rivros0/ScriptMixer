@@ -12,7 +12,7 @@ from frame_export import create_frame_export
 
 # === FINESTRA PRINCIPALE === #
 root = tk.Tk()
-root.title("Smixer / Gestione Elaborati")
+root.title("Smixer / Gestione Elaborati V0.8")
 root.geometry("1280x800")
 
 # Modalità corrente (default: Preparazione)

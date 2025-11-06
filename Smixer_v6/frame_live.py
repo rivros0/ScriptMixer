@@ -25,11 +25,9 @@ def create_frame_live(root, global_config):
     entry_remote = tk.Entry(
         frame,
         width=80,
-        textvariable=global_config["remote_directory"],  # legata alla config globale
+        textvariable=global_config["remote_directory"],
     )
     entry_remote.grid(row=0, column=1, padx=5, pady=5, columnspan=3, sticky="ew")
-
-    # (se ti va, qui si potrebbe in futuro aggiungere un pulsante "Scegli…")
 
     # === Estensione === #
     lbl_ext = tk.Label(frame, text="Estensione file (es: .cpp):", bg="white")
@@ -38,9 +36,29 @@ def create_frame_live(root, global_config):
     entry_ext = tk.Entry(
         frame,
         width=20,
-        textvariable=global_config["file_extension"],  # usa la stessa estensione globale
+        textvariable=global_config["file_extension"],
     )
     entry_ext.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
+    # === Checkbutton: Conta righe + Auto refresh === #
+    count_lines_var = tk.BooleanVar(value=False)
+    auto_refresh_var = tk.BooleanVar(value=True)
+
+    chk_count_lines = tk.Checkbutton(
+        frame,
+        text="Conta righe",
+        variable=count_lines_var,
+        bg="white",
+    )
+    chk_count_lines.grid(row=1, column=2, padx=5, pady=5, sticky="w")
+
+    chk_auto_refresh = tk.Checkbutton(
+        frame,
+        text="Aggiornamento automatico",
+        variable=auto_refresh_var,
+        bg="white",
+    )
+    chk_auto_refresh.grid(row=1, column=3, padx=5, pady=5, sticky="w")
 
     # === Pulsanti controllo === #
     btn_scan = tk.Button(frame, text="Scan", width=15)
@@ -52,16 +70,18 @@ def create_frame_live(root, global_config):
     # === Tabella risultati === #
     tree = ttk.Treeview(
         frame,
-        columns=("cartella", "num_file", "elenco_file", "ultima_modifica"),
+        columns=("cartella", "num_file", "num_righe", "elenco_file", "ultima_modifica"),
         show="headings",
     )
     tree.heading("cartella", text="Cartella")
     tree.heading("num_file", text="N. File")
+    tree.heading("num_righe", text="Righe")
     tree.heading("elenco_file", text="File trovati")
     tree.heading("ultima_modifica", text="Ultima modifica")
 
-    tree.column("cartella", width=150)
+    tree.column("cartella", width=120)
     tree.column("num_file", width=60, anchor="center")
+    tree.column("num_righe", width=80, anchor="center")
     tree.column("elenco_file", width=500)
     tree.column("ultima_modifica", width=140)
 
@@ -77,7 +97,7 @@ def create_frame_live(root, global_config):
     entry_verifica = tk.Entry(
         frame,
         width=30,
-        textvariable=global_config["verifica_name"],  # condiviso con la barra in alto
+        textvariable=global_config["verifica_name"],
     )
     entry_verifica.grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
@@ -105,40 +125,83 @@ def create_frame_live(root, global_config):
     btn_copy = tk.Button(frame, text="Crea copia locale", command=crea_copia)
     btn_copy.grid(row=3, column=2, padx=5, pady=5)
 
-    # === Funzione di aggiornamento periodico === #
+    # === Aggiornamento periodico "a goccia" === #
+    auto_job_id = None  # id dell'after schedulato
+
     def aggiorna_tabella():
         """
         Aggiorna la tabella leggendo la directory remota e l'estensione
         da global_config e mostrando SOLO le cartelle test01..test30.
+
+        Se l'opzione 'Aggiornamento automatico' è attiva, riprogramma da sola
+        il prossimo aggiornamento.
         """
+        nonlocal auto_job_id
+
         path = global_config["remote_directory"].get().strip()
         estensione = global_config["file_extension"].get().strip()
-
-        if not path or not os.path.isdir(path):
-            # se la directory non è valida, non schedula niente di nuovo
-            return
 
         # Pulisce la tabella
         for i in tree.get_children():
             tree.delete(i)
 
-        risultati = scan_remote_directory(path, estensione)
+        if not path or not os.path.isdir(path):
+            # directory non valida → nessun auto-refresh
+            auto_job_id = None
+            return
 
-        for nome_dir, num_file, files, ultima_mod in risultati:
+        risultati = scan_remote_directory(
+            path,
+            estensione,
+            count_lines=count_lines_var.get(),
+        )
+
+        for nome_dir, num_file, num_righe, files, ultima_mod in risultati:
+            righe_display = num_righe if num_righe is not None else "-"
             tree.insert(
                 "",
                 "end",
-                values=(nome_dir, num_file, ", ".join(files), ultima_mod),
+                values=(nome_dir, num_file, righe_display, ", ".join(files), ultima_mod),
             )
 
-        # Riprogramma il prossimo aggiornamento
-        frame.after(SCAN_INTERVAL, aggiorna_tabella)
+        # Riprogramma il prossimo aggiornamento solo se l'opzione è attiva
+        if auto_refresh_var.get():
+            # annulla eventuale job precedente
+            if auto_job_id is not None:
+                try:
+                    frame.after_cancel(auto_job_id)
+                except Exception:
+                    pass
+            auto_job_id = frame.after(SCAN_INTERVAL, aggiorna_tabella)
+        else:
+            auto_job_id = None
+
+    def on_toggle_auto():
+        """
+        Callback quando l'utente spunta/de-spunta 'Aggiornamento automatico'.
+        """
+        nonlocal auto_job_id
+
+        if auto_refresh_var.get():
+            # appena attivato → aggiorna subito e programma il prossimo giro
+            aggiorna_tabella()
+        else:
+            # disattivato → cancella l'eventuale job schedulato
+            if auto_job_id is not None:
+                try:
+                    frame.after_cancel(auto_job_id)
+                except Exception:
+                    pass
+                auto_job_id = None
+
+    chk_auto_refresh.config(command=on_toggle_auto)
 
     # Collega i pulsanti
     btn_scan.config(command=aggiorna_tabella)
     btn_clear.config(command=lambda: tree.delete(*tree.get_children()))
 
-    # Avvia scansione automatica (se la directory è già impostata)
-    frame.after(SCAN_INTERVAL, aggiorna_tabella)
+    # Avvia l'aggiornamento "a goccia" se l'opzione è attiva
+    if auto_refresh_var.get():
+        auto_job_id = frame.after(SCAN_INTERVAL, aggiorna_tabella)
 
     return frame

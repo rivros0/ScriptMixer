@@ -20,6 +20,23 @@ def _iter_test_folders(base_directory):
         yield folder_name, folder_path
 
 
+def _sanitize_verifica_name(nome: str) -> str:
+    """
+    Ripulisce il nome verifica per usarlo in un nome di cartella:
+    - trim spazi
+    - sostituisce spazi con underscore
+    - tiene solo caratteri alfanumerici, underscore e trattino.
+    """
+    if not nome:
+        return ""
+    nome = nome.strip().replace(" ", "_")
+    allowed = []
+    for ch in nome:
+        if ch.isalnum() or ch in ("_", "-"):
+            allowed.append(ch)
+    return "".join(allowed)
+
+
 def scan_test_folders(remote_directory, report_text):
     """
     Scansiona le cartelle test01..test30 nella directory remota indicata e
@@ -33,11 +50,11 @@ def scan_test_folders(remote_directory, report_text):
         messagebox.showerror("Errore", "La directory specificata non esiste.")
         return
 
-    report_text.insert("end", f"Controllo nella directory: {remote_directory}\n")
+    report_text.insert("end", f"Controllo nelle cartelle test di:\n  {remote_directory}\n\n")
 
     for folder_name, folder_path in _iter_test_folders(remote_directory):
         if os.path.isdir(folder_path):
-            report_text.insert("end", f"Trovata: {folder_name}\n")
+            report_text.insert("end", f"[OK] {folder_name}\n")
             for root, dirs, files in os.walk(folder_path):
                 for file in files:
                     file_path = os.path.join(root, file)
@@ -49,7 +66,9 @@ def scan_test_folders(remote_directory, report_text):
                         f"  - {file} (Creato il: {creation_time})\n",
                     )
         else:
-            report_text.insert("end", f"Mancante: {folder_name}\n")
+            report_text.insert("end", f"[MANCANTE] {folder_name}\n")
+
+    report_text.see("end")
 
 
 def _copy_test_folders(remote_directory, target_root, report_text=None):
@@ -83,12 +102,16 @@ def create_local_copy(
     lbl_directory,
     update_directory_listing_func,
     update_subdirectories_list_func,
+    nome_verifica=None,
 ):
     """
     Crea una copia locale delle cartelle test01..test30 presenti in remote_directory.
 
-    - La copia viene creata sul Desktop in una nuova cartella con nome timestamp
-      (es. '20251106_17-30').
+    - La copia viene creata sul Desktop in una nuova cartella con nome:
+          YYYYMMDD_HH-MM
+      oppure, se nome_verifica è valorizzato:
+          YYYYMMDD_HH-MM_<nomeVerificaPulito>
+
     - Vengono copiate SOLO le cartelle test01..test30.
     - Aggiorna:
         * il report,
@@ -99,17 +122,39 @@ def create_local_copy(
     """
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     timestamp = datetime.now().strftime("%Y%m%d_%H-%M")
-    new_directory = os.path.join(desktop, timestamp)
+
+    safe_name = _sanitize_verifica_name(nome_verifica or "")
+    if safe_name:
+        folder_name = f"{timestamp}_{safe_name}"
+    else:
+        folder_name = timestamp
+
+    new_directory = os.path.join(desktop, folder_name)
     os.makedirs(new_directory, exist_ok=True)
+
+    # Log in stile simile a Correzione/Live
+    report_text.delete("1.0", "end")
+    report_text.insert(
+        "end",
+        "Creazione copia locale delle cartelle test.\n"
+        f"Directory remota di origine:\n  {remote_directory}\n"
+        f"Directory locale di destinazione:\n  {new_directory}\n\n",
+    )
 
     copied = _copy_test_folders(remote_directory, new_directory, report_text)
 
-    report_text.insert("end", f"Copie create in: {new_directory}\n")
     if not copied:
         report_text.insert(
             "end",
-            "Attenzione: nessuna cartella test01–test30 trovata nella directory remota.\n",
+            "ATTENZIONE: nessuna cartella test01–test30 trovata nella directory remota.\n",
         )
+    else:
+        report_text.insert(
+            "end",
+            f"Cartelle test copiate ({len(copied)}):\n  " + ", ".join(copied) + "\n",
+        )
+
+    report_text.see("end")
 
     # Aggiorna la label di quella scheda (vecchio comportamento)
     lbl_directory.config(text=f"Directory selezionata: {new_directory}")
@@ -179,6 +224,7 @@ def clear_test_folders(selected_directory, report_text):
                         )
 
     report_text.insert("end", "Tutte le cartelle test remote sono state pulite.\n")
+    report_text.see("end")
 
 
 def choose_directory(lbl_directory, update_directory_listing_func, update_subdirectories_list_func):

@@ -16,14 +16,14 @@ def create_frame_preparazione(root, global_config):
     Serve per:
       - scegliere la directory remota che contiene le cartelle test01..test30
       - scansionare lo stato delle cartelle test
-      - creare una copia locale (su Desktop, in una cartella timestampata)
+      - creare una copia locale (su Desktop, in una cartella timestampata + nome verifica)
       - distribuire un file in tutte le cartelle test
       - opzionalmente cancellare le cartelle test sulla directory remota
 
     Usa:
       - global_config["remote_directory"]     : directory remota (server)
       - global_config["selected_directory"]   : ultima directory locale creata
-      - report_text                           : log degli eventi
+      - global_config["verifica_name"]        : nome verifica (usato nel nome cartella)
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
@@ -96,11 +96,13 @@ def create_frame_preparazione(root, global_config):
     def do_create_local_copy():
         """
         Crea una copia locale di test01..test30 sul Desktop in una cartella
-        timestampata, aggiorna il log e imposta:
+        timestampata + nome verifica, aggiorna il log e imposta:
           - global_config["selected_directory"]
           - lbl_local_dir
         """
         remote_dir = global_config["remote_directory"].get().strip()
+        nome_verifica = global_config["verifica_name"].get().strip()
+
         if not remote_dir:
             messagebox.showwarning(
                 "Attenzione",
@@ -108,14 +110,13 @@ def create_frame_preparazione(root, global_config):
             )
             return
 
-        # Usiamo create_local_copy di data_handler.
-        # I parametri update_* non servono in questo frame, quindi passiamo lambda.
         new_dir = data_handler.create_local_copy(
             remote_dir,
             report_text,
             lbl_local_dir,           # verrà impostato a "Directory selezionata: ..."
             lambda *_: None,         # update_directory_listing_func
             lambda *_: None,         # update_subdirectories_list_func
+            nome_verifica=nome_verifica,
         )
 
         if new_dir:
@@ -161,6 +162,11 @@ def create_frame_preparazione(root, global_config):
         file_name = os.path.basename(file_path)
         copied_count = 0
 
+        report_text.insert(
+            "end",
+            f"Distribuzione del file '{file_name}' nelle cartelle test...\n",
+        )
+
         for folder_name, folder_path in data_handler._iter_test_folders(remote_dir):
             if os.path.isdir(folder_path):
                 dest_path = os.path.join(folder_path, file_name)
@@ -179,9 +185,7 @@ def create_frame_preparazione(root, global_config):
                 "File NON distribuito."
             )
         else:
-            msg = (
-                f"File '{file_name}' distribuito in {copied_count} cartelle test.\n"
-            )
+            msg = f"File '{file_name}' distribuito in {copied_count} cartelle test.\n"
 
         report_text.insert("end", msg + "\n")
         report_text.see("end")
@@ -251,7 +255,7 @@ def create_frame_preparazione(root, global_config):
         frame,
         width=100,
         height=15,
-        bg="#fffbe6",  # leggermente diverso per contrasto
+        bg="#fffbe6",
     )
     report_text.grid(
         row=4,
@@ -272,13 +276,14 @@ def create_frame_preparazione(root, global_config):
     frame.columnconfigure(2, weight=1)
     frame.columnconfigure(3, weight=1)
 
-    # Messaggio iniziale nel log
+    # Messaggio iniziale nel log — stile coerente con Correzione/Live
     report_text.insert(
         "end",
         "Modalità Preparazione pronta.\n"
         "- Imposta la directory remota con le cartelle test01..test30.\n"
         "- Usa 'Scansiona cartelle test' per verificare la presenza dei file.\n"
-        "- Usa 'Crea copia locale (Desktop)' per creare una copia delle cartelle test.\n"
+        "- Usa 'Crea copia locale (Desktop)' per creare una copia delle cartelle test:\n"
+        "    → la cartella sul Desktop avrà nome: timestamp + nome verifica.\n"
         "- Usa 'Distribuisci file nelle cartelle test' per copiare un file in tutte le cartelle test.\n"
         "- Dopo la copia, la directory locale verrà impostata come directory di lavoro\n"
         "  per le schede Correzione ed Export.\n"
