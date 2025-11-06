@@ -62,7 +62,7 @@ Struttura prevista della repo (semplificata):
 * `business_logic.py`
 * `similarity.py`
 * `frame_live.py`
-* `frame_raccolta.py`
+* `frame_preparazione.py`
 * `frame_correzione.py`
 * `frame_export.py`
 
@@ -74,7 +74,7 @@ Tutto in root.
 
 ### 4.0 Layout comune delle frame
 
-Tutte le frame (`frame_raccolta`, `frame_live`, `frame_correzione`, `frame_export`) condividono una **prima riga standard** con:
+Tutte le frame (`frame_preparazione`, `frame_live`, `frame_correzione`, `frame_export`) condividono una **prima riga standard** con:
 
 * `Label` **"Nome"** e una `Entry` associata a `global_config["nome"]` (StringVar) per inserire un identificativo della sessione di lavoro (es. nome verifica, classe, data).
 * `Label` **"Directory selezionata"** e una `Label` cliccabile che mostra `global_config["current_directory"]`.
@@ -101,7 +101,7 @@ Responsabilità:
   * eventuali flag (es. `auto_scan_enabled`, `count_lines_enabled`, ecc.).
 * Creare e mantenere i 4 frame principali:
 
-  * `frame_raccolta = create_frame_raccolta(root, global_config)`
+  * `frame_preparazione = create_frame_preparazione(root, global_config)`
   * `frame_live = create_frame_live(root, global_config)`
   * `frame_correzione = create_frame_correzione(root, global_config)`
   * `frame_export = create_frame_export(root, global_config)`
@@ -315,14 +315,14 @@ Gestione timer:
 
 ---
 
-### 4.7 `frame_raccolta.py`
+### 4.7 `frame_preparazione.py`
 
-Responsabile della **modalità Preparazione/Raccolta** (viene usata prima del Live per preparare il contesto di lavoro sulle cartelle test).
+Responsabile della **modalità Preparazione/preparazione** (viene usata prima del Live per preparare il contesto di lavoro sulle cartelle test).
 
 Firma:
 
 ```python
-def create_frame_raccolta(root, global_config):
+def create_frame_preparazione(root, global_config):
     ...
     return frame
 ```
@@ -380,7 +380,7 @@ Funzionalità effettive (derivate da `frame_preparazione.py` della repo v6):
 
   * Una `ScrolledText` che riceve, tramite funzione locale `log(msg)`, i messaggi operativi con timestamp (scansioni, copie, distribuzioni, pulizie, eventuali errori).
 
-La modalità Preparazione/Raccolta è quindi il punto in cui il docente:
+La modalità Preparazione è quindi il punto in cui il docente:
 
 * controlla rapidamente lo stato delle cartelle `testXX` sul server;
 * crea uno snapshot locale completo e organizzato dei compiti da correggere;

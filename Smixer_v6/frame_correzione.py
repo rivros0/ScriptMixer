@@ -190,15 +190,7 @@ def create_frame_correzione(root, global_config):
         output_dir = os.path.join(base_dir, "00_MixOutput")
         data_handler.open_selected_directory(output_dir)
 
-    btn_merge_files = tk.Button(
-        frame_correzione,
-        text="MEGAmerge",
-        command=lambda: business_logic.merge_all_files(
-            global_config["selected_directory"].get(), report_text
-        ),
-    )
-    btn_merge_files.grid(row=5, column=0, sticky="ew", padx=10, pady=5)
-
+    
     btn_open_directory = tk.Button(
         frame_correzione,
         text="Apri Directory Output",
