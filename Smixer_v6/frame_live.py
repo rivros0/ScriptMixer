@@ -1,317 +1,144 @@
 import os
-import time
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
-import utils
-import datetime
+from tkinter import filedialog, ttk
 
-SCAN_INTERVAL_BASE = 30   # s tra un ciclo e il successivo (se tutto ok)
-SCAN_INTERVAL_MAX  = 120  # s massimo con backoff
+from utils import scan_remote_directory, copy_test_directories
+
+SCAN_INTERVAL = 30000  # 30 secondi
+
 
 def create_frame_live(root, global_config):
-    frame = tk.Frame(root, bg="lightblue")
+    """
+    Frame modalità LIVE.
 
-    # --- Riga 0: directory remota ---
-    tk.Label(frame, text="Directory remota:", bg="lightblue").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-    tk.Entry(frame, width=80, textvariable=global_config["remote_directory"]).grid(row=0, column=1, padx=5, pady=5, columnspan=3)
+    Usa:
+      - global_config["remote_directory"] : directory remota con le cartelle testXX
+      - global_config["file_extension"]   : estensione dei file (es. .cpp)
+      - global_config["verifica_name"]    : nome della verifica
+    """
+    frame = tk.Frame(root, bg="white")
 
-    def scegli_directory():
-        directory = filedialog.askdirectory(title="Seleziona directory remota")
-        if directory:
-            global_config["remote_directory"].set(directory)
+    # === Directory Remota === #
+    lbl_remote = tk.Label(frame, text="Directory remota:", bg="white")
+    lbl_remote.grid(row=0, column=0, sticky="w", padx=5, pady=5)
 
-    tk.Button(frame, text="Scegli...", command=scegli_directory).grid(row=0, column=4, padx=5, pady=5)
+    entry_remote = tk.Entry(
+        frame,
+        width=80,
+        textvariable=global_config["remote_directory"],  # legata alla config globale
+    )
+    entry_remote.grid(row=0, column=1, padx=5, pady=5, columnspan=3, sticky="ew")
 
-    # --- Opzioni ---
-    enable_loc = tk.BooleanVar(value=True)       # Conta linee
-    enable_autoscan = tk.BooleanVar(value=True)  # Auto-scan a cicli
+    # (se ti va, qui si potrebbe in futuro aggiungere un pulsante "Scegli…")
 
-    # --- Riga 1: estensione + controlli ---
-    tk.Label(frame, text="Estensione file (es: .cpp):", bg="lightblue").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-    tk.Entry(frame, width=12, textvariable=global_config["file_extension"]).grid(row=1, column=1, padx=5, pady=5, sticky="w")
+    # === Estensione === #
+    lbl_ext = tk.Label(frame, text="Estensione file (es: .cpp):", bg="white")
+    lbl_ext.grid(row=1, column=0, sticky="w", padx=5, pady=5)
 
-    chk_loc = tk.Checkbutton(frame, text="Conta linee", variable=enable_loc, bg="lightblue")
-    chk_loc.grid(row=1, column=2, padx=5, pady=5, sticky="w")
+    entry_ext = tk.Entry(
+        frame,
+        width=20,
+        textvariable=global_config["file_extension"],  # usa la stessa estensione globale
+    )
+    entry_ext.grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
-    chk_autoscan = tk.Checkbutton(frame, text="Auto-scan", variable=enable_autoscan, bg="lightblue")
-    chk_autoscan.grid(row=1, column=3, padx=5, pady=5, sticky="w")
+    # === Pulsanti controllo === #
+    btn_scan = tk.Button(frame, text="Scan", width=15)
+    btn_scan.grid(row=0, column=4, padx=5, pady=5)
 
-    btn_scan = tk.Button(frame, text="Scan", width=12)
-    btn_scan.grid(row=1, column=4, padx=5, pady=5)
+    btn_clear = tk.Button(frame, text="Pulisci tabella", width=15)
+    btn_clear.grid(row=1, column=4, padx=5, pady=5)
 
-    lbl_timer = tk.Label(frame, text=f"In attesa…", fg="blue", bg="lightblue")
-    lbl_timer.grid(row=1, column=5, padx=10, sticky="w")
-
-    # --- Tabella ---
+    # === Tabella risultati === #
     tree = ttk.Treeview(
         frame,
-        columns=("cartella", "num_file", "linee_totali", "elenco_file", "ultima_modifica", "tempo_trascorso"),
-        show="headings"
+        columns=("cartella", "num_file", "elenco_file", "ultima_modifica"),
+        show="headings",
     )
-    for col, text, w, anchor in (
-        ("cartella", "Cartella", 180, "w"),
-        ("num_file", "N. File", 70, "center"),
-        ("linee_totali", "Linee (tot)", 100, "e"),
-        ("elenco_file", "File trovati", 380, "w"),
-        ("ultima_modifica", "Ultima modifica", 160, "center"),
-        ("tempo_trascorso", "Tempo trascorso", 120, "center"),
-    ):
-        tree.heading(col, text=text)
-        tree.column(col, width=w, anchor=anchor)
-    tree.grid(row=2, column=0, columnspan=6, padx=10, pady=10, sticky="nsew")
+    tree.heading("cartella", text="Cartella")
+    tree.heading("num_file", text="N. File")
+    tree.heading("elenco_file", text="File trovati")
+    tree.heading("ultima_modifica", text="Ultima modifica")
+
+    tree.column("cartella", width=150)
+    tree.column("num_file", width=60, anchor="center")
+    tree.column("elenco_file", width=500)
+    tree.column("ultima_modifica", width=140)
+
+    tree.grid(row=2, column=0, columnspan=5, padx=10, pady=10, sticky="nsew")
 
     frame.grid_rowconfigure(2, weight=1)
     frame.grid_columnconfigure(3, weight=1)
 
-    # --- Riga 3: copia locale + esito ---
-    tk.Label(frame, text="Nome verifica:", bg="lightblue").grid(row=3, column=0, sticky="w", padx=5)
-    tk.Entry(frame, width=30, textvariable=global_config["verifica_name"]).grid(row=3, column=1, padx=5, pady=5, sticky="w")
+    # === Nome verifica === #
+    lbl_nome_verifica = tk.Label(frame, text="Nome verifica:", bg="white")
+    lbl_nome_verifica.grid(row=3, column=0, sticky="w", padx=5, pady=5)
 
-    lbl_esito = tk.Label(frame, text="", fg="green", bg="lightblue")
-    lbl_esito.grid(row=3, column=3, columnspan=2, sticky="w")
+    entry_verifica = tk.Entry(
+        frame,
+        width=30,
+        textvariable=global_config["verifica_name"],  # condiviso con la barra in alto
+    )
+    entry_verifica.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+
+    # === Pulsante crea copia locale === #
+    lbl_esito = tk.Label(frame, text="", fg="green", bg="white")
+    lbl_esito.grid(row=3, column=3, columnspan=2, sticky="w", padx=5, pady=5)
 
     def crea_copia():
+        """
+        Crea una copia locale delle sole cartelle test01..test30
+        dalla directory remota alla destinazione scelta.
+        """
         nome_verifica = global_config["verifica_name"].get().strip()
         directory_remota = global_config["remote_directory"].get().strip()
+
         if not nome_verifica or not directory_remota:
-            lbl_esito.config(text="⚠️ Inserisci tutti i dati richiesti.", fg="red", bg="lightblue")
+            lbl_esito.config(text="⚠️ Inserisci directory remota e nome verifica.")
             return
+
         destinazione = filedialog.askdirectory(title="Seleziona destinazione")
         if destinazione:
-            try:
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-                new_dir_name = f"{timestamp}_{nome_verifica}"
-                new_dir = os.path.join(destinazione, new_dir_name)
-                os.makedirs(new_dir, exist_ok=True)
+            esito = copy_test_directories(directory_remota, destinazione, nome_verifica)
+            lbl_esito.config(text=esito)
 
-                # Copia SOLO test01...test30 (blindato)
-                for i in range(1, 31):
-                    nome_dir = f"test{str(i).zfill(2)}"
-                    src_dir = os.path.join(directory_remota, nome_dir)
-                    dest_dir = os.path.join(new_dir, nome_dir)
-                    if os.path.isdir(src_dir):
-                        os.makedirs(dest_dir, exist_ok=True)
-                        for root_dir, dirs, files in os.walk(src_dir):
-                            rel_path = os.path.relpath(root_dir, src_dir)
-                            final_dest = os.path.join(dest_dir, rel_path)
-                            os.makedirs(final_dest, exist_ok=True)
-                            for file in files:
-                                src_file = os.path.join(root_dir, file)
-                                dest_file = os.path.join(final_dest, file)
-                                try:
-                                    with open(src_file, "rb") as fsrc, open(dest_file, "wb") as fdst:
-                                        fdst.write(fsrc.read())
-                                except Exception as e:
-                                    print(f"Errore copiando {src_file}: {e}")
+    btn_copy = tk.Button(frame, text="Crea copia locale", command=crea_copia)
+    btn_copy.grid(row=3, column=2, padx=5, pady=5)
 
-                lbl_esito.config(text=f"Copia completata in {new_dir}", fg="green", bg="lightblue")
-                messagebox.showinfo("Copia completata", f"I file sono stati copiati in:\n{new_dir}")
-            except Exception as e:
-                lbl_esito.config(text=f"Errore: {e}", fg="red", bg="lightblue")
+    # === Funzione di aggiornamento periodico === #
+    def aggiorna_tabella():
+        """
+        Aggiorna la tabella leggendo la directory remota e l'estensione
+        da global_config e mostrando SOLO le cartelle test01..test30.
+        """
+        path = global_config["remote_directory"].get().strip()
+        estensione = global_config["file_extension"].get().strip()
 
-    tk.Button(frame, text="Crea copia locale", command=crea_copia).grid(row=3, column=2, padx=5)
-
-    # ====== Stato per scansione progressiva ====== #
-    scan_interval = {"value": SCAN_INTERVAL_BASE}
-    failure_streak = {"value": 0}
-
-    countdown = {"value": SCAN_INTERVAL_BASE}   # tempo tra cicli (quando non si sta scansionando)
-    timer_id = {"after": None}                  # singolo timer
-    tick_id = {"after": None}                   # tick 1/sec durante la scansione progressiva
-
-    scan_state = {
-        "active": False,
-        "start_time": 0.0,
-        "names": [],      # lista cartelle da elaborare
-        "index": 0,       # indice corrente
-        "path": "",       # base path
-        "ext": "",        # estensione normalizzata (.cpp ecc.)
-    }
-
-    def stop_timer():
-        if timer_id["after"] is not None:
-            try: frame.after_cancel(timer_id["after"])
-            except Exception: pass
-            timer_id["after"] = None
-
-    def stop_tick():
-        if tick_id["after"] is not None:
-            try: frame.after_cancel(tick_id["after"])
-            except Exception: pass
-            tick_id["after"] = None
-
-    def start_timer():
-        """(Ri)avvia il conto alla rovescia tra un ciclo e il successivo."""
-        stop_timer()
-        if not enable_autoscan.get():
-            lbl_timer.config(text="Auto-scan OFF")
-            return
-        countdown["value"] = scan_interval["value"]
-        lbl_timer.config(text=f"Prossimo ciclo tra {countdown['value']}s")
-        timer_id["after"] = frame.after(1000, countdown_tick)
-
-    def countdown_tick():
-        if not enable_autoscan.get():
-            stop_timer()
-            lbl_timer.config(text="Auto-scan OFF")
-            return
-        countdown["value"] -= 1
-        if countdown["value"] > 0:
-            lbl_timer.config(text=f"Prossimo ciclo tra {countdown['value']}s")
-            timer_id["after"] = frame.after(1000, countdown_tick)
-        else:
-            stop_timer()
-            begin_scan_cycle()
-
-    def begin_scan_cycle():
-        """Prepara una scansione progressiva (una cartella al secondo)."""
-        stop_timer()
-        stop_tick()
-
-        base = global_config["remote_directory"].get().strip()
-        if not base or not os.path.isdir(base):
-            lbl_timer.config(text="Percorso non valido")
-            if enable_autoscan.get():
-                # aumenta un po' l'intervallo e riprova
-                scan_interval["value"] = min(SCAN_INTERVAL_MAX, scan_interval["value"] + 15)
-                start_timer()
+        if not path or not os.path.isdir(path):
+            # se la directory non è valida, non schedula niente di nuovo
             return
 
-        ext = global_config["file_extension"].get().strip()
-        if ext and not ext.startswith("."):
-            ext = "." + ext
+        # Pulisce la tabella
+        for i in tree.get_children():
+            tree.delete(i)
 
-        # prepara elenco cartelle test presenti (senza camminare i file)
-        names = utils.list_test_dir_names(base, root_prefix="test*")
+        risultati = scan_remote_directory(path, estensione)
 
-        # reset tabella
-        tree.delete(*tree.get_children())
-        # inserisci placeholder per stabilizzare l'UI
-        for name in names:
-            tree.insert("", "end", iid=name, values=(name, "…", "…", "…", "…", "…"))
-
-        scan_state.update({
-            "active": True,
-            "start_time": time.time(),
-            "names": names,
-            "index": 0,
-            "path": base,
-            "ext": ext,
-        })
-        lbl_timer.config(text=f"Scansione in corso… (0/{len(names)})")
-        process_next_dir()  # parte subito la prima
-
-    def process_next_dir():
-        """Elabora una cartella e pianifica la successiva tra 1 secondo."""
-        stop_tick()  # evita doppi tick
-        if not scan_state["active"]:
-            return
-
-        names = scan_state["names"]
-        i = scan_state["index"]
-        total = len(names)
-
-        # Fine?
-        if i >= total:
-            end_scan_cycle()
-            return
-
-        base = scan_state["path"]
-        ext  = scan_state["ext"]
-        name = names[i]
-
-        try:
-            (nm, num_file, files, ultima_mod, total_loc) = utils.dir_summary(
-                base, name, extension=ext, with_loc=bool(enable_loc.get())
+        for nome_dir, num_file, files, ultima_mod in risultati:
+            tree.insert(
+                "",
+                "end",
+                values=(nome_dir, num_file, ", ".join(files), ultima_mod),
             )
 
-            # calcolo tempo trascorso dall'ultima mod
-            import datetime as _dt
-            tempo_trascorso = ""
-            if ultima_mod:
-                try:
-                    ultima_dt = _dt.datetime.strptime(ultima_mod, "%Y-%m-%d %H:%M:%S")
-                    diff = utils.now_ts() - ultima_dt
-                    m, s = divmod(int(diff.total_seconds()), 60)
-                    tempo_trascorso = f"{m}m {s}s" if m > 0 else f"{s}s"
-                except Exception:
-                    tempo_trascorso = "?"
+        # Riprogramma il prossimo aggiornamento
+        frame.after(SCAN_INTERVAL, aggiorna_tabella)
 
-            # aggiorna/crea riga
-            values = (
-                nm,
-                num_file,
-                (total_loc if enable_loc.get() else "–"),
-                ", ".join(files),
-                ultima_mod,
-                tempo_trascorso
-            )
-            if tree.exists(nm):
-                tree.item(nm, values=values)
-            else:
-                tree.insert("", "end", iid=nm, values=values)
+    # Collega i pulsanti
+    btn_scan.config(command=aggiorna_tabella)
+    btn_clear.config(command=lambda: tree.delete(*tree.get_children()))
 
-        except Exception as e:
-            # in caso di errore, mostra qualcosa e continua
-            if tree.exists(name):
-                tree.item(name, values=(name, "ERR", "–", "(errore lettura)", "", ""))
-            else:
-                tree.insert("", "end", iid=name, values=(name, "ERR", "–", "(errore lettura)", "", ""))
+    # Avvia scansione automatica (se la directory è già impostata)
+    frame.after(SCAN_INTERVAL, aggiorna_tabella)
 
-        # avanzamento
-        scan_state["index"] = i + 1
-        lbl_timer.config(text=f"Scansione in corso… ({scan_state['index']}/{total})")
-
-        # pianifica la prossima cartella tra 1 secondo, se ancora attivo
-        if scan_state["active"]:
-            tick_id["after"] = frame.after(1000, process_next_dir)
-
-    def end_scan_cycle():
-        """Chiusura del ciclo progressivo + backoff + (eventuale) avvio countdown prossimo ciclo."""
-        stop_tick()
-        scan_state["active"] = False
-        duration = time.time() - scan_state["start_time"]
-
-        # Backoff semplice: se >5s o ci sono state eccezioni visibili (difficile da contare qui),
-        # aumentiamo l'intervallo, altrimenti riduciamo gradualmente verso la base.
-        if duration > 5 * max(1, len(scan_state["names"])):  # durata media >5s/cartella: rete pesante
-            scan_interval["value"] = min(SCAN_INTERVAL_MAX, int(scan_interval["value"] * 1.5))
-        else:
-            # alleggeriamo fino alla base
-            if scan_interval["value"] > SCAN_INTERVAL_BASE:
-                scan_interval["value"] = max(SCAN_INTERVAL_BASE, scan_interval["value"] - 15)
-
-        lbl_timer.config(text=f"Ciclo completato in {int(duration)}s • Prossimo in {scan_interval['value']}s")
-
-        if enable_autoscan.get():
-            start_timer()
-        else:
-            lbl_timer.config(text="Auto-scan OFF")
-
-    # --- Handlers UI ---
-    def on_toggle_autoscan():
-        if enable_autoscan.get():
-            # se si riattiva mentre una scansione è già in corso, non fare nulla: prosegue a goccia
-            if not scan_state["active"]:
-                start_timer()
-        else:
-            # disattiva tutto
-            stop_timer()
-            stop_tick()
-            scan_state["active"] = False
-            lbl_timer.config(text="Auto-scan OFF")
-
-    chk_autoscan.config(command=on_toggle_autoscan)
-
-    def manual_scan():
-        """Avvia subito un ciclo progressivo; interrompe timer/eventuali cicli in corso."""
-        stop_timer()
-        stop_tick()
-        scan_state["active"] = False
-        begin_scan_cycle()
-
-    btn_scan.config(command=manual_scan)
-
-    # avvio iniziale: parte un ciclo subito, poi countdown in base alle impostazioni
-    manual_scan()
     return frame

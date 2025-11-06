@@ -1,235 +1,235 @@
 import os
-import json
-import sys
-import datetime
-import fnmatch
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import fnmatch
-import datetime as _dt
+from datetime import datetime
 
-# --- helpers ---
+import data_handler  # per riutilizzare la logica su test01..test30
 
-def _iter_test_dirs(base_path):
-    """Generator: test01..test30 (solo se esistono)."""
-    for i in range(1, 31):
-        name = f"test{str(i).zfill(2)}"
-        full = os.path.join(base_path, name)
-        if os.path.isdir(full):
-            yield name, full
 
-def _filter_by_root_prefix(names, root_prefix):
-    """
-    Filtra i nomi in base a un pattern glob (es. 'test*').
-    Per sicurezza, se il pattern NON inizia con 'test', non restituiamo nulla.
-    """
-    root_prefix = (root_prefix or "test*").strip()
-    if not root_prefix.lower().startswith("test"):
-        return []
-    return [n for n in names if fnmatch.fnmatch(n, root_prefix)]
-
-# === FUNZIONI DI SCANSIONE (SOLO test01..test30) === #
+# =============================================================================
+#  UTILITÀ PER LA SCHEDA "CORREZIONE"
+# =============================================================================
 
 def update_directory_listing(directory, entry_extension, report_text):
-    """Elenca file SOLO in test01..test30 (ricorsivo)."""
+    """
+    Popola la text-area di report con l'elenco dei file trovati nella directory
+    (ricerca ricorsiva), filtrando per estensione.
+
+    - directory: path di partenza
+    - entry_extension: widget (Entry / StringVar) con l'estensione (.cpp, .java, ...)
+    - report_text: widget Text dove scrivere la lista dei file
+    """
     report_text.delete("1.0", "end")
-    file_extension = entry_extension.get().strip()
-    if file_extension and not file_extension.startswith('.'):
+
+    if not directory or not os.path.isdir(directory):
+        report_text.insert("end", "Directory non valida o inesistente.\n")
+        return
+
+    file_extension = entry_extension.get().strip() if hasattr(entry_extension, "get") else str(entry_extension).strip()
+    if file_extension != "" and not file_extension.startswith("."):
         file_extension = f".{file_extension}"
 
-    for name, base in _iter_test_dirs(directory):
-        for root, dirs, files in os.walk(base):
-            for file in files:
-                if not file_extension or file.endswith(file_extension):
-                    file_path = os.path.join(root, file)
-                    report_text.insert("end", f"{file_path}\n")
+    report_text.insert("end", f"Scansione di: {directory}\n")
+    if file_extension:
+        report_text.insert("end", f"Filtro estensione: {file_extension}\n\n")
+    else:
+        report_text.insert("end", "Nessun filtro di estensione applicato.\n\n")
 
-def update_subdirectories_list(selected_directory, tree, entry_extension):
-    """Popola la treeview SOLO per test01..test30."""
-    tree.delete(*tree.get_children())
-    for name, _ in _iter_test_dirs(selected_directory):
-        check_directory_content(selected_directory, name, tree, entry_extension)
+    for root, _dirs, files in os.walk(directory):
+        for file in files:
+            if file_extension == "" or file.endswith(file_extension):
+                file_path = os.path.join(root, file)
+                report_text.insert("end", f"{file_path}\n")
 
-def check_directory_content(base_directory, subdir, tree, entry_extension):
-    """Conta cartelle/file in una sottocartella testXX e abilita 'CopiaInClipboard' se esiste _mix.txt."""
-    full_path = os.path.join(base_directory, subdir)
-    num_folders = num_files = num_extension_files = 0
+    report_text.see("end")
+
+
+def count_directory_content(directory, entry_extension):
+    """
+    Conta:
+      - quante sottocartelle
+      - quanti file totali
+      - quanti file con la specifica estensione
+      - l'elenco dei file con quella estensione
+
+    Restituisce: (num_folders, num_files, num_extension_files, extension_files)
+    """
+    num_folders = 0
+    num_files = 0
+    num_extension_files = 0
     extension_files = []
 
-    ext = entry_extension.get().strip()
-    if ext and not ext.startswith('.'):
-        ext = f".{ext}"
+    ext = entry_extension.get().strip() if hasattr(entry_extension, "get") else str(entry_extension).strip()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
 
-    if os.path.isdir(full_path):
-        for root, dirs, files in os.walk(full_path):
-            num_folders += len(dirs)
-            num_files += len(files)
-            current_extension_files = [f for f in files if not ext or f.endswith(ext)]
-            num_extension_files += len(current_extension_files)
-            extension_files += current_extension_files
+    for _root, dirs, files in os.walk(directory):
+        num_folders += len(dirs)
+        num_files += len(files)
+        if ext:
+            current_extension_files = [f for f in files if f.endswith(ext)]
+        else:
+            current_extension_files = list(files)
+        num_extension_files += len(current_extension_files)
+        extension_files += current_extension_files
 
-    mix_file_path = os.path.join(base_directory, "00_MixOutput", f"{subdir}_mix.txt")
-    button_text = "CopiaInClipboard" if os.path.exists(mix_file_path) else "-----"
+    return num_folders, num_files, num_extension_files, extension_files
+
+
+def check_directory_content(base_directory, subdir, tree, entry_extension):
+    """
+    Calcola le statistiche sulla sottocartella `subdir` e inserisce una riga
+    nella Treeview.
+
+    La Treeview nella scheda Correzione si aspetta 5 colonne:
+      (subdirectory, num_folders, num_files, num_extension_files, extension_files)
+    """
+    full_path = os.path.join(base_directory, subdir)
+    num_folders, num_files, num_extension_files, extension_files = count_directory_content(
+        full_path, entry_extension
+    )
 
     tree.insert(
-        "", "end",
-        values=(subdir, num_folders, num_files, num_extension_files, ", ".join(extension_files), button_text)
+        "",
+        "end",
+        values=(
+            subdir,
+            num_folders,
+            num_files,
+            num_extension_files,
+            ", ".join(extension_files),
+        ),
     )
 
-def scan_test_directories(base_path, extension="", root_prefix="test*"):
+
+def update_subdirectories_list(selected_directory, tree, entry_extension):
     """
-    Restituisce sempre fino alle 30 cartelle test01..test30 (se esistono),
-    filtrate per 'root_prefix' (glob, default 'test*').
-    Ritorna lista di tuple: (nome_cartella, numero_file, elenco_file, ultima_modifica_str).
+    Elenca le sottodirectory immediate di `selected_directory`, le ordina
+    alfabeticamente e per ciascuna calcola le statistiche inserendole
+    nella Treeview.
     """
-    risultati = []
-    if not os.path.isdir(base_path):
-        return risultati
+    if not selected_directory or not os.path.isdir(selected_directory):
+        # Svuota comunque la tree
+        tree.delete(*tree.get_children())
+        return
 
-    names = [name for name, _ in _iter_test_dirs(base_path)]
-    names = _filter_by_root_prefix(names, root_prefix)
+    subdirectories = [
+        d
+        for d in os.listdir(selected_directory)
+        if os.path.isdir(os.path.join(selected_directory, d))
+    ]
+    subdirectories.sort()
 
-    for name in names:
-        full_path = os.path.join(base_path, name)
-        tutti_file = []
-        if os.path.isdir(full_path):
-            for root_dir, dirs, files in os.walk(full_path):
-                for f in files:
-                    if not extension or f.endswith(extension):
-                        tutti_file.append(os.path.join(root_dir, f))
+    tree.delete(*tree.get_children())
+    for subdir in subdirectories:
+        check_directory_content(selected_directory, subdir, tree, entry_extension)
 
-        num_file = len(tutti_file)
-        nomi_file = [os.path.basename(f) for f in tutti_file]
 
-        ultima_mod = ""
-        if tutti_file:
-            ultima_mod_time = max(os.path.getmtime(f) for f in tutti_file)
-            ultima_mod = datetime.datetime.fromtimestamp(ultima_mod_time).strftime("%Y-%m-%d %H:%M:%S")
+# =============================================================================
+#  UTILITÀ PER LA SCHEDA "LIVE"
+# =============================================================================
 
-        risultati.append((name, num_file, nomi_file, ultima_mod))
-    return risultati
-
-# === Salva/Carica config: invariati rispetto alla tua base === #
-def salva_configurazione(config):
-    file_path = filedialog.asksaveasfilename(
-        defaultextension=".json",
-        filetypes=[("JSON files", "*.json")],
-        title="Salva configurazione"
-    )
-    if file_path:
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=4)
-            messagebox.showinfo("Salvataggio riuscito", f"Configurazione salvata in {file_path}")
-        except Exception as e:
-            messagebox.showerror("Errore", f"Errore nel salvataggio: {e}")
-
-def carica_configurazione():
-    file_path = filedialog.askopenfilename(
-        filetypes=[("JSON files", "*.json")],
-        title="Carica configurazione"
-    )
-    if file_path and os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            messagebox.showerror("Errore", f"Errore nel caricamento: {e}")
-    return None
-
-def open_selected_directory(lbl_directory):
-    selected_directory = lbl_directory.cget("text").replace("Directory selezionata: ", "")
-    if os.path.exists(selected_directory):
-        try:
-            if os.name == 'nt':
-                os.startfile(selected_directory)
-            elif os.name == 'posix':
-                if sys.platform == 'darwin':
-                    os.system(f'open "{selected_directory}"')
-                else:
-                    os.system(f'xdg-open "{selected_directory}"')
-        except Exception as e:
-            messagebox.showerror("Errore", f"Non è stato possibile aprire la directory:\n{str(e)}")
-    else:
-        messagebox.showwarning("Attenzione", "Nessuna directory valida selezionata.")
-
-# ----- Calcolo linee di codice (per Live) -----
-
-def _count_lines_in_file(file_path: str) -> int:
-    """Conta le linee di un file di testo in modo robusto."""
-    try:
-        # Lettura testuale con fallback sugli errori
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return sum(1 for _ in f)
-    except Exception:
-        return 0
-
-def _total_loc_in_dir(full_path: str, extension: str = "") -> int:
-    """Somma le linee di tutti i file (eventualmente filtrati per estensione) nella dir."""
-    total = 0
-    for root_dir, _, files in os.walk(full_path):
-        for f in files:
-            if not extension or f.endswith(extension):
-                total += _count_lines_in_file(os.path.join(root_dir, f))
-    return total
-
-def scan_test_directories_with_loc(base_path, extension: str = "", root_prefix: str = "test*"):
+def scan_remote_directory(remote_directory, extension):
     """
-    Come scan_test_directories ma aggiunge il campo 'total_loc' (linee totali).
-    Ritorna: (name, num_file, nomi_file, ultima_mod, total_loc)
-    """
-    risultati_base = scan_test_directories(base_path, extension=extension, root_prefix=root_prefix)
-    risultati = []
-    for (name, num_file, nomi_file, ultima_mod) in risultati_base:
-        full_path = os.path.join(base_path, name)
-        total_loc = _total_loc_in_dir(full_path, extension=extension)
-        risultati.append((name, num_file, nomi_file, ultima_mod, total_loc))
-    return risultati
+    Scansiona la directory remota alla ricerca delle sole cartelle test01..test30
+    (come definito in data_handler), e per ciascuna restituisce:
 
+      (nome_cartella, num_file_con_estensione, elenco_file, ultima_modifica_str)
 
-def list_test_dir_names(base_path: str, root_prefix: str = "test*"):
-    """Ritorna la lista delle sottocartelle testXX presenti (filtrate per glob, di default test*)."""
-    if not os.path.isdir(base_path):
-        return []
-    names = []
-    for i in range(1, 31):
-        name = f"test{str(i).zfill(2)}"
-        if fnmatch.fnmatch(name, root_prefix):
-            full = os.path.join(base_path, name)
-            if os.path.isdir(full):
-                names.append(name)
-    return names
+    - remote_directory: path della radice che contiene le cartelle testXX
+    - extension: estensione da filtrare (es. ".cpp"); se vuota, conta tutti i file
 
-def dir_summary(base_path: str, name: str, extension: str = "", with_loc: bool = True):
+    Ritorna una lista di tuple ordinate per nome_cartella.
     """
-    Calcola i dati per UNA sola cartella testXX:
-    ritorna (name, num_file, nomi_file, ultima_mod_str, total_loc)
-    """
-    full_path = os.path.join(base_path, name)
-    tutti_file = []
-    total_loc = 0
-    if os.path.isdir(full_path):
-        for root_dir, dirs, files in os.walk(full_path):
+    results = []
+
+    if not remote_directory or not os.path.isdir(remote_directory):
+        return results
+
+    ext = extension.strip()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+
+    for folder_name, folder_path in data_handler._iter_test_folders(remote_directory):
+        if not os.path.isdir(folder_path):
+            # cartella mancante: non la mostriamo nella tabella Live
+            continue
+
+        files_found = []
+        last_mod = None
+
+        for root, _dirs, files in os.walk(folder_path):
             for f in files:
-                if not extension or f.endswith(extension):
-                    fp = os.path.join(root_dir, f)
-                    tutti_file.append(fp)
-                    if with_loc:
-                        # riusa la funzione robusta già presente
-                        try:
-                            total_loc += _count_lines_in_file(fp)
-                        except Exception:
-                            pass
-    num_file = len(tutti_file)
-    nomi_file = [os.path.basename(f) for f in tutti_file]
-    ultima_mod = ""
-    if tutti_file:
-        try:
-            t = max(os.path.getmtime(f) for f in tutti_file)
-            ultima_mod = _dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            ultima_mod = ""
-    return (name, num_file, nomi_file, ultima_mod, total_loc)
+                if not ext or f.endswith(ext):
+                    files_found.append(f)
+                    file_path = os.path.join(root, f)
+                    mtime = os.path.getmtime(file_path)
+                    if last_mod is None or mtime > last_mod:
+                        last_mod = mtime
 
-def now_ts():
-    return _dt.datetime.now()
+        num_file = len(files_found)
+        files_found.sort()
+
+        if last_mod is not None:
+            last_mod_str = datetime.fromtimestamp(last_mod).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            last_mod_str = "-"
+
+        results.append((folder_name, num_file, files_found, last_mod_str))
+
+    # Ordina per nome cartella (test01, test02, ...)
+    results.sort(key=lambda x: x[0])
+    return results
+
+
+def copy_test_directories(remote_directory, destination_root, nome_verifica):
+    """
+    Copia SOLO le cartelle test01..test30 esistenti da `remote_directory`
+    dentro una nuova cartella creata sotto `destination_root`.
+
+    La nuova cartella avrà nome:
+        YYYYMMDD_HH-MM_<nome_verifica>
+
+    Restituisce una stringa di esito (da mostrare nella label della scheda Live).
+    """
+    nome_verifica = (nome_verifica or "").strip()
+    if not nome_verifica:
+        return "⚠️ Nome verifica mancante."
+
+    if not remote_directory or not os.path.isdir(remote_directory):
+        return "⚠️ Directory remota non valida."
+
+    if not destination_root or not os.path.isdir(destination_root):
+        return "⚠️ Directory di destinazione non valida."
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H-%M")
+    dest_base = os.path.join(destination_root, f"{timestamp}_{nome_verifica}")
+    os.makedirs(dest_base, exist_ok=True)
+
+    # Riutilizziamo la logica di data_handler per copiare SOLO test01..test30
+    copied = data_handler._copy_test_folders(remote_directory, dest_base, report_text=None)
+
+    if not copied:
+        return f"⚠️ Nessuna cartella test01–test30 trovata in {remote_directory}."
+
+    return f"✅ Copiate {len(copied)} cartelle di test in {dest_base}."
+
+
+# =============================================================================
+#  WRAPPER DI COMPATIBILITÀ (per vecchio codice che usava utils)
+# =============================================================================
+
+def choose_directory(lbl_directory, update_directory_listing_func, update_subdirectories_list_func):
+    """
+    Wrapper di compatibilità: delega a data_handler.choose_directory.
+
+    Usato nelle versioni precedenti della scheda Correzione.
+    """
+    data_handler.choose_directory(lbl_directory, update_directory_listing_func, update_subdirectories_list_func)
+
+
+def open_selected_directory(selected_directory):
+    """
+    Wrapper di compatibilità: delega a data_handler.open_selected_directory.
+
+    Accetta stringa, Label o StringVar, come in data_handler.
+    """
+    data_handler.open_selected_directory(selected_directory)
