@@ -156,6 +156,12 @@ mode_menu.add_radiobutton(
     command=lambda: set_mode("Live"),
 )
 mode_menu.add_radiobutton(
+    label="Domini / FTP",
+    variable=current_mode,
+    value="Domini",
+    command=lambda: set_mode("Domini"),
+)
+mode_menu.add_radiobutton(
     label="Correzione",
     variable=current_mode,
     value="Correzione",
@@ -167,12 +173,7 @@ mode_menu.add_radiobutton(
     value="Export",
     command=lambda: set_mode("Export"),
 )
-mode_menu.add_radiobutton(
-    label="Domini / FTP",
-    variable=current_mode,
-    value="Domini",
-    command=lambda: set_mode("Domini"),
-)
+
 menubar.add_cascade(label="Modalità", menu=mode_menu)
 
 root.config(menu=menubar)
