@@ -1,5 +1,3 @@
-# frame_export.py
-
 import os
 import tkinter as tk
 from tkinter import Scrollbar, messagebox
@@ -7,7 +5,7 @@ from tkinter import Scrollbar, messagebox
 import business_logic
 import data_handler
 
-YELLOW_BG = "#fff5cc"
+YELLOW_BG = "#ec9109"
 
 
 def create_frame_export(root, global_config):
