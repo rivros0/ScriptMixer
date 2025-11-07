@@ -1,3 +1,11 @@
 /Smixer_v6/__pycache__
 *.pyc
 *.pyc
+Smixer_v6/__pycache__/business_logic.cpython-312.pyc
+Smixer_v6/__pycache__/data_handler.cpython-312.pyc
+Smixer_v6/__pycache__/frame_correzione.cpython-312.pyc
+Smixer_v6/__pycache__/frame_live.cpython-312.pyc
+Smixer_v6/__pycache__/frame_preparazione.cpython-312.pyc
+Smixer_v6/__pycache__/frame_raccolta.cpython-312.pyc
+Smixer_v6/__pycache__/similarity.cpython-312.pyc
+Smixer_v6/__pycache__/utils.cpython-312.pyc
