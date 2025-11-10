@@ -10,6 +10,8 @@ from frame_preparazione import create_frame_preparazione
 from frame_correzione import create_frame_correzione
 from frame_export import create_frame_export
 from frame_domini import create_frame_domini  # nuova frame Domini/FTP
+from frame_associa import open_associa_window  # nuova finestra Associa
+
 
 # === FINESTRA PRINCIPALE === #
 
@@ -20,6 +22,7 @@ root.geometry("1280x800")
 # Percorso all'icona (funziona anche dentro l'exe)
 base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 icon_path = os.path.join(base_path, "icone", "app.ico")
+
 if os.path.exists(icon_path):
     try:
         root.iconbitmap(icon_path)
@@ -94,7 +97,10 @@ def salva_configurazione() -> None:
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4)
-            messagebox.showinfo("Salvataggio riuscito", f"Configurazione salvata in {file_path}")
+            messagebox.showinfo(
+                "Salvataggio riuscito",
+                f"Configurazione salvata in {file_path}",
+            )
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nel salvataggio: {e}")
 
@@ -120,16 +126,18 @@ def carica_configurazione() -> None:
             mode = config.get("current_mode", "Preparazione")
             if mode not in ("Preparazione", "Live", "Correzione", "Export", "Domini"):
                 mode = "Preparazione"
+
             set_mode(mode)
 
             messagebox.showinfo(
-                "Caricamento riuscito", f"Configurazione caricata da {file_path}"
+                "Caricamento riuscito",
+                f"Configurazione caricata da {file_path}",
             )
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nel caricamento: {e}")
 
 
-# === MENUBAR: File + Modalità === #
+# === MENUBAR: File + Associa + Modalità === #
 
 menubar = tk.Menu(root)
 
@@ -140,6 +148,12 @@ file_menu.add_command(label="Salva configurazione", command=salva_configurazione
 file_menu.add_separator()
 file_menu.add_command(label="Esci", command=root.destroy)
 menubar.add_cascade(label="File", menu=file_menu)
+
+# Associa (nuova voce, apre la finestra di associazione email ↔ cartelle test)
+menubar.add_command(
+    label="Associa",
+    command=lambda: open_associa_window(root, global_config),
+)
 
 # Modalità (ordine: Preparazione, Live, Correzione, Export, Domini)
 mode_menu = tk.Menu(menubar, tearoff=0)
@@ -185,8 +199,13 @@ top_bar = tk.Frame(root, bg="#eeeeee")
 top_bar.pack(side="top", fill="x", padx=5, pady=5)
 
 tk.Label(top_bar, text="Nome Verifica:", bg="#eeeeee").grid(
-    row=0, column=0, padx=5, pady=2, sticky="e"
+    row=0,
+    column=0,
+    padx=5,
+    pady=2,
+    sticky="e",
 )
+
 entry_nome = tk.Entry(
     top_bar,
     textvariable=global_config["verifica_name"],
@@ -195,8 +214,13 @@ entry_nome = tk.Entry(
 entry_nome.grid(row=0, column=1, padx=5, pady=2, sticky="w")
 
 tk.Label(top_bar, text="Directory selezionata:", bg="#eeeeee").grid(
-    row=0, column=2, padx=10, pady=2, sticky="e"
+    row=0,
+    column=2,
+    padx=10,
+    pady=2,
+    sticky="e",
 )
+
 lbl_directory = tk.Label(
     top_bar,
     textvariable=global_config["selected_directory"],
@@ -214,6 +238,7 @@ def on_directory_click(event) -> None:
     Se c'è un percorso valido → apri file manager.
     """
     path = global_config["selected_directory"].get().strip()
+
     if not path or path.lower() == "nessuna":
         selected = filedialog.askdirectory(
             title="Seleziona directory locale di lavoro (cartelle testXX)"
@@ -224,7 +249,9 @@ def on_directory_click(event) -> None:
         data_handler.open_selected_directory(path)
 
 
+# Correzione: si usa il click sinistro del mouse
 lbl_directory.bind("<Button-1>", on_directory_click)
+
 top_bar.grid_columnconfigure(3, weight=1)
 
 
@@ -242,6 +269,7 @@ frame_domini = create_frame_domini(content_frame, global_config)
 
 # Modalità iniziale: Preparazione
 set_mode("Preparazione")
+
 
 if __name__ == "__main__":
     root.mainloop()
