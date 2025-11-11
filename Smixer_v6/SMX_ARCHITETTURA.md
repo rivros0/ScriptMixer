@@ -1,5 +1,10 @@
 # SMX – Architettura e scelte progettuali
 
+## Origine del nome
+
+Il progetto nasce originariamente come **Script Mixer**, uno strumento per la gestione e l’analisi di elaborati di programmazione.
+Nel tempo il nome è stato abbreviato in **Smixer** e, nelle versioni più recenti, ulteriormente sintetizzato in **SMX**, mantenendo però la stessa filosofia di fondo: un ambiente unico per preparare, raccogliere, correggere ed esportare i compiti degli studenti in modo automatizzato e trasparente.
+
 ## 1. Obiettivi del progetto
 
 Smixer è uno strumento per:
@@ -35,8 +40,8 @@ Anche questa informazione dovrà essere inserita nel file di configurazione salv
 
 3. **Configurazione centralizzata**
 
-   * Le impostazioni globali (directory remota, estensione file, nome verifica, ecc.) sono conservate in un dizionario `global_config` di `tk.*Var` in `main.py`.
-   * `main.py` si occupa di salvare/caricare questa configurazione in JSON.
+   * Le impostazioni globali (directory remota, estensione file, nome verifica, ecc.) sono conservate in un dizionario `global_config` di `tk.*Var` in `SMX.py`.
+   * `SMX.py` si occupa di salvare/caricare questa configurazione in JSON.
 
 4. **Niente side-effect nascosti**
 
@@ -49,6 +54,18 @@ Anche questa informazione dovrà essere inserita nel file di configurazione salv
 
    * `remote_directory`: dove si trovano le cartelle `test01`…`test30` sul server.
    * `local_base_directory`: dove vengono copiate e riorganizzate le cartelle in locale (per raccolta/correzione).
+
+6. **Flessibilità nel nome delle cartelle `testXX`**
+
+   * In prospettiva, le cartelle degli studenti potranno ricevere un **prefisso** o un **suffisso** (ad esempio per distinguere diversi laboratori o turni).
+   * SMX mantiene un **array di pattern di nome** (es. `test{num:02d}`, `labA_test{num:02d}`, `test{num:02d}_labB`) memorizzato in configurazione.
+   * Nelle schede opportune (Preparazione, Live, Correzione) viene offerto un **menù a tendina** per scegliere il pattern da utilizzare.
+   * La scelta del pattern corrente viene salvata nel file di configurazione, così da essere ripristinata automaticamente all’avvio successivo.
+
+**
+
+* `remote_directory`: dove si trovano le cartelle `test01`…`test30` sul server.
+* `local_base_directory`: dove vengono copiate e riorganizzate le cartelle in locale (per raccolta/correzione).
 
 ---
 
@@ -75,7 +92,7 @@ Tutto in root.
 
 ### 4.0 Barra superiore comune
 
-La barra superiore è creata in `main.py` ed è **comune a tutte le modalità** (Preparazione, Live, Correzione, Export). Non è ridisegnata dentro ogni frame.
+La barra superiore è creata in `SMX.py` ed è **comune a tutte le modalità** (Preparazione, Live, Correzione, Export). Non è ridisegnata dentro ogni frame.
 
 Contiene:
 
@@ -88,11 +105,14 @@ Contiene:
 
 Questa barra rimane in alto e viene usata come **punto unico** per vedere e cambiare la directory di lavoro corrente.
 
-### 4.1 `main.py`
+### 4.1 `SMX.py`
 
 Responsabilità:
 
+* File principale dell’applicazione: l’entry point del programma è `SMX.py` (in precedenza `main.py`).
+
 * Creare la finestra principale Tkinter (`root = tk.Tk()`), titolo e dimensioni.
+
 * Definire `global_config`:
 
   * `remote_directory` (StringVar)
@@ -100,20 +120,24 @@ Responsabilità:
   * `verifica_name` (StringVar)
   * `selected_directory` (StringVar, inizialmente `"nessuna"`)
   * `current_mode` (StringVar) – modalità corrente ("Preparazione", "Live", "Correzione", "Export").
+
 * Creare e mantenere i 4 frame principali all'interno di `content_frame`:
 
   * `frame_preparazione = create_frame_preparazione(content_frame, global_config)`
   * `frame_live = create_frame_live(content_frame, global_config)`
   * `frame_correzione = create_frame_correzione(content_frame, global_config)`
   * `frame_export = create_frame_export(content_frame, global_config)`
+
 * Gestire lo **switch di modalità** tramite **menù a tendina nella menubar**:
 
   * menù `Modalità` con 4 `add_radiobutton` collegati a `current_mode`.
   * la funzione `set_mode(mode: str)` nasconde tutti i frame (`pack_forget()`) e mostra solo quello selezionato (`pack(fill="both", expand=True)`).
+
 * Creare la **barra superiore comune** (vedi 4.0) con:
 
   * label "Nome verifica:" + entry `global_config["verifica_name"]`;
   * label "Directory selezionata:" + label cliccabile su `global_config["selected_directory"]`.
+
 * Implementare:
 
   * `salva_configurazione()` → salva su file JSON i valori di `remote_directory`, `file_extension`, `verifica_name`, `selected_directory`, `current_mode`.

@@ -7,6 +7,8 @@ import queue
 from ftplib import FTP
 from datetime import datetime
 
+import similarity
+
 YELLOW_BG = "#fff5cc"
 
 
@@ -59,18 +61,21 @@ def create_frame_domini(root, global_config):
         Nome alunno, dominio, stato, avanzamento, numero file,
         elenco file, peso complessivo cartella, ultima modifica
     - Label in alto a destra con peso complessivo di 00_DominiFTP
+    - Analisi delle somiglianze e mappa delle similitudini
     """
-
     frame = tk.Frame(root, bg=YELLOW_BG)
 
-    # ======================================================================
+    # ==================================================================
     # CODA PER AGGIORNAMENTI GUI (usata dai thread worker)
-    # ======================================================================
+    # ==================================================================
     update_queue = queue.Queue()
 
-    # ======================================================================
+    # Risultati analisi similarità (riempiti da "Analizza somiglianze")
+    similarity_results = {}
+
+    # ==================================================================
     # RIGA 0: PULSANTI COMANDI + LABEL PESO TOTALE FTP
-    # ======================================================================
+    # ==================================================================
     btn_modello = tk.Button(frame, text="Crea modello CSV", width=18)
     btn_modello.grid(row=0, column=0, padx=6, pady=6, sticky="w")
 
@@ -90,13 +95,13 @@ def create_frame_domini(root, global_config):
         frame,
         text="Totale FTP: 0 B",
         bg=YELLOW_BG,
-        anchor="e"
+        anchor="e",
     )
     lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")
 
-    # ======================================================================
+    # ==================================================================
     # RIGA 1: TABELLA PRINCIPALE
-    # ======================================================================
+    # ==================================================================
     colonne = (
         "Alunno",
         "Dominio",
@@ -118,7 +123,7 @@ def create_frame_domini(root, global_config):
         elif col == "Dominio":
             tree.column(col, width=180, anchor="center")
         elif col == "Stato":
-            tree.column(col, width=200, anchor="w")
+            tree.column(col, width=220, anchor="w")
         elif col == "Elenco file":
             tree.column(col, width=260, anchor="w")
         else:
@@ -130,31 +135,31 @@ def create_frame_domini(root, global_config):
     tree.configure(yscrollcommand=scrollbar_vert.set)
     scrollbar_vert.grid(row=1, column=6, sticky="ns")
 
-    # ======================================================================
+    # ==================================================================
     # RIGHE 2-3: AREA LOG
-    # ======================================================================
+    # ==================================================================
     tk.Label(frame, text="Log eventi:", bg=YELLOW_BG).grid(row=2, column=0, sticky="w", padx=6, pady=6)
 
-    txt_log = tk.Text(frame, height=6, width=120)
+    txt_log = tk.Text(frame, height=8, width=120)
     txt_log.grid(row=3, column=0, columnspan=7, padx=10, pady=5, sticky="ew")
 
     def log(messaggio):
         """
         Scrive un messaggio nel riquadro log.
-        (Da usare SOLO nel thread principale.)
+        Da usare solo nel thread principale o tramite update_queue.
         """
         txt_log.insert("end", messaggio + "\n")
         txt_log.see("end")
 
-    # ======================================================================
+    # ==================================================================
     # STRUTTURE DATI IN MEMORIA
-    # ======================================================================
+    # ==================================================================
     credenziali_by_item = {}   # item_id -> (ftp_user, ftp_pass)
     testdir_by_item = {}       # item_id -> cartella test associata
 
-    # ======================================================================
+    # ==================================================================
     # FUNZIONE: CREA MODELLO CSV
-    # ======================================================================
+    # ==================================================================
     def crea_modello_csv():
         """
         Crea un file CSV con intestazioni:
@@ -203,7 +208,11 @@ def create_frame_domini(root, global_config):
 
             log("Modello CSV creato in: " + percorso_csv)
             if cognomi:
-                log("Inseriti automaticamente {} cognomi dalle cartelle test.".format(len(set(cognomi))))
+                log(
+                    "Inseriti automaticamente {} cognomi dalle cartelle test.".format(
+                        len(set(cognomi))
+                    )
+                )
             else:
                 log("Nessuna cartella test trovata: modello creato solo con intestazioni.")
         except Exception as e:
@@ -211,9 +220,9 @@ def create_frame_domini(root, global_config):
 
     btn_modello.configure(command=crea_modello_csv)
 
-    # ======================================================================
+    # ==================================================================
     # FUNZIONE: CARICA CSV
-    # ======================================================================
+    # ==================================================================
     def carica_csv():
         """
         Carica un CSV con colonne:
@@ -232,12 +241,15 @@ def create_frame_domini(root, global_config):
         credenziali_by_item.clear()
         testdir_by_item.clear()
         btn_scarica.configure(state="disabled")
+        btn_analizza.configure(state="disabled")
+        btn_mappa.configure(state="disabled")
+        similarity_results.clear()
 
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
             messagebox.showwarning(
                 "Attenzione",
-                "Seleziona prima la directory principale delle prove (cartelle testXX)."
+                "Seleziona prima la directory principale delle prove (cartelle testXX).",
             )
             return
 
@@ -308,22 +320,26 @@ def create_frame_domini(root, global_config):
         log(
             "File CSV '{}' caricato correttamente. Righe valide: {}".format(
                 os.path.basename(percorso_csv),
-                righe_inserite
+                righe_inserite,
             )
         )
 
         if righe_inserite > 0:
             btn_scarica.configure(state="normal")
-            log("Bottone download FTP abilitato ({} domini caricati).".format(righe_inserite))
+            log(
+                "Bottone download FTP abilitato ({} domini caricati).".format(
+                    righe_inserite
+                )
+            )
         else:
             btn_scarica.configure(state="disabled")
             messagebox.showwarning("Attenzione", "Nessuna riga valida trovata nel CSV.")
 
     btn_carica.configure(command=carica_csv)
 
-    # ======================================================================
+    # ==================================================================
     # FUNZIONE: RICALCOLO PESO TOTALE DIRECTORY 00_DominiFTP
-    # ======================================================================
+    # ==================================================================
     def aggiorna_peso_totale_ftp():
         """
         Calcola il peso complessivo della directory 00_DominiFTP
@@ -350,9 +366,9 @@ def create_frame_domini(root, global_config):
 
         lbl_peso_totale.config(text="Totale FTP: " + format_bytes(totale))
 
-    # ======================================================================
+    # ==================================================================
     # FUNZIONE: PROCESSO CENTRALE CHE LEGGE LA CODA E AGGIORNA LA GUI
-    # ======================================================================
+    # ==================================================================
     def process_update_queue():
         """
         Legge gli aggiornamenti dalla coda e li applica alla GUI.
@@ -381,15 +397,14 @@ def create_frame_domini(root, global_config):
                     log("=== Download FTP completato ===")
                     btn_scarica.configure(state="normal")
                     btn_analizza.configure(state="normal")
-
         except queue.Empty:
             pass
 
         frame.after(100, process_update_queue)
 
-    # ======================================================================
+    # ==================================================================
     # FUNZIONE: DOWNLOAD FTP DI TUTTI I DOMINI (IN PARALLELO)
-    # ======================================================================
+    # ==================================================================
     def scarica_tutti():
         """
         Per ogni riga in tabella:
@@ -403,13 +418,16 @@ def create_frame_domini(root, global_config):
         if not base_dir or not os.path.isdir(base_dir):
             messagebox.showwarning(
                 "Attenzione",
-                "Seleziona prima la directory principale delle prove (cartelle testXX)."
+                "Seleziona prima la directory principale delle prove (cartelle testXX).",
             )
             return
 
         items = tree.get_children()
         if not items:
-            messagebox.showwarning("Attenzione", "Nessun dominio da scaricare. Carica prima il CSV.")
+            messagebox.showwarning(
+                "Attenzione",
+                "Nessun dominio da scaricare. Carica prima il CSV.",
+            )
             return
 
         dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
@@ -418,6 +436,9 @@ def create_frame_domini(root, global_config):
 
         log("=== Inizio download FTP in {} ===".format(dir_ftp_base))
         btn_scarica.configure(state="disabled")
+        btn_analizza.configure(state="disabled")
+        btn_mappa.configure(state="disabled")
+        similarity_results.clear()
 
         # prepara lista di job (lettura dei dati SOLO nel main thread)
         jobs = []
@@ -469,7 +490,12 @@ def create_frame_domini(root, global_config):
                 return
 
             if not ftp_user or not ftp_pass:
-                update_queue.put(("log", "❌ Credenziali mancanti per '{}' ({}).".format(alunno, dominio)))
+                update_queue.put(
+                    (
+                        "log",
+                        "❌ Credenziali mancanti per '{}' ({}).".format(alunno, dominio),
+                    )
+                )
                 update_queue.put(("set", item_id, "Stato", "Errore: credenziali mancanti"))
                 return
 
@@ -479,10 +505,27 @@ def create_frame_domini(root, global_config):
                 ftp = FTP(host, timeout=30, encoding="latin-1")
                 ftp.login(user=ftp_user, passwd=ftp_pass)
                 update_queue.put(("set", item_id, "Stato", stato_base + " / Login OK"))
-                update_queue.put(("log", "✅ Login riuscito su {} per '{}'".format(host, alunno)))
+                update_queue.put(
+                    (
+                        "log",
+                        "✅ Login riuscito su {} per '{}'".format(
+                            host,
+                            alunno,
+                        ),
+                    )
+                )
             except Exception as e:
                 update_queue.put(("set", item_id, "Stato", "Errore login FTP"))
-                update_queue.put(("log", "❌ Errore di connessione/login {} per '{}': {}".format(host, alunno, e)))
+                update_queue.put(
+                    (
+                        "log",
+                        "❌ Errore di connessione/login {} per '{}': {}".format(
+                            host,
+                            alunno,
+                            e,
+                        ),
+                    )
+                )
                 return
 
             nome_cartella_alunno = alunno if alunno else "sconosciuto"
@@ -543,8 +586,23 @@ def create_frame_domini(root, global_config):
 
             totale_file = len(lista_file_remoti)
             if totale_file == 0:
-                update_queue.put(("set", item_id, "Stato", stato_base + " / Nessun file remoto"))
-                update_queue.put(("log", "ℹ Nessun file trovato su {} per '{}'".format(dominio, alunno)))
+                update_queue.put(
+                    (
+                        "set",
+                        item_id,
+                        "Stato",
+                        stato_base + " / Nessun file remoto",
+                    )
+                )
+                update_queue.put(
+                    (
+                        "log",
+                        "ℹ Nessun file trovato su {} per '{}'".format(
+                            dominio,
+                            alunno,
+                        ),
+                    )
+                )
                 try:
                     ftp.quit()
                 except Exception:
@@ -560,7 +618,10 @@ def create_frame_domini(root, global_config):
                 cartella_locale_corrente = dir_locale_alunno
 
                 for nome_dir in parti[:-1]:
-                    cartella_locale_corrente = os.path.join(cartella_locale_corrente, nome_dir)
+                    cartella_locale_corrente = os.path.join(
+                        cartella_locale_corrente,
+                        nome_dir,
+                    )
                     if not os.path.isdir(cartella_locale_corrente):
                         try:
                             os.makedirs(cartella_locale_corrente, exist_ok=True)
@@ -592,10 +653,26 @@ def create_frame_domini(root, global_config):
 
                 percentuale = int((conteggio_file * 100) / float(totale_file))
 
-                update_queue.put(("set", item_id, "Avanzamento", "{}%".format(percentuale)))
+                update_queue.put(
+                    ("set", item_id, "Avanzamento", "{}%".format(percentuale))
+                )
                 update_queue.put(("set", item_id, "N. file", str(conteggio_file)))
-                update_queue.put(("set", item_id, "Peso cartella", format_bytes(peso_totale_alunno)))
-                update_queue.put(("set", item_id, "Elenco file", ", ".join(elenco_file_preview)))
+                update_queue.put(
+                    (
+                        "set",
+                        item_id,
+                        "Peso cartella",
+                        format_bytes(peso_totale_alunno),
+                    )
+                )
+                update_queue.put(
+                    (
+                        "set",
+                        item_id,
+                        "Elenco file",
+                        ", ".join(elenco_file_preview),
+                    )
+                )
 
             try:
                 ftp.quit()
@@ -607,15 +684,24 @@ def create_frame_domini(root, global_config):
             else:
                 testo_data = "n.d."
 
-            update_queue.put(("set", item_id, "Ultima modifica", testo_data))
-            update_queue.put(("set", item_id, "Stato", stato_base + " / Download OK"))
+            update_queue.put(( "set", item_id, "Ultima modifica", testo_data))
             update_queue.put(
-                ("log",
-                 "✅ Download completato per '{}' ({}). Ultima modifica remota: {}".format(
-                     alunno,
-                     dominio,
-                     testo_data
-                 ))
+                (
+                    "set",
+                    item_id,
+                    "Stato",
+                    stato_base + " / Download OK",
+                )
+            )
+            update_queue.put(
+                (
+                    "log",
+                    "✅ Download completato per '{}' ({}). Ultima modifica remota: {}".format(
+                        alunno,
+                        dominio,
+                        testo_data,
+                    ),
+                )
             )
 
         # avvio di tutti i worker in parallelo
@@ -636,16 +722,272 @@ def create_frame_domini(root, global_config):
         monitor = threading.Thread(target=monitor_thread, daemon=True)
         monitor.start()
 
-    btn_scarica.configure(command=scarica_tutti)
+    # ==================================================================
+    # FUNZIONE: ANALISI DELLE SOMIGLIANZE
+    # ==================================================================
+    def analizza_somiglianze():
+        """
+        Analizza le somiglianze secondo i casi richiesti:
 
-    # ======================================================================
+        1) Verifica contro dominio personale
+        2) Verifica contro verifiche dei compagni
+        3) Verifica contro domini dei compagni
+        4) Dominio personale contro domini dei compagni
+
+        I risultati vengono riassunti nel log e salvati in 'similarity_results'
+        per la visualizzazione della mappa.
+        """
+        base_dir = global_config["selected_directory"].get().strip()
+        if not base_dir or not os.path.isdir(base_dir):
+            messagebox.showwarning(
+                "Attenzione",
+                "Seleziona prima la directory principale delle prove (cartelle testXX).",
+            )
+            return
+
+        dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
+        if not os.path.isdir(dir_ftp_base):
+            messagebox.showwarning(
+                "Attenzione",
+                "La directory 00_DominiFTP non esiste. Esegui prima il download dai domini.",
+            )
+            return
+
+        # Costruzione delle mappe {studente: directory_verifica} e {studente: directory_dominio}
+        tests_dirs = {}
+        domini_dirs = {}
+
+        for item_id in tree.get_children():
+            valori = list(tree.item(item_id, "values"))
+            alunno = valori[0]
+
+            if not alunno:
+                continue
+
+            nome_cartella_test = testdir_by_item.get(item_id, "")
+            if nome_cartella_test:
+                percorso_test = os.path.join(base_dir, nome_cartella_test)
+                if os.path.isdir(percorso_test):
+                    tests_dirs[alunno] = percorso_test
+
+            dir_dominio_alunno = os.path.join(dir_ftp_base, alunno)
+            if os.path.isdir(dir_dominio_alunno):
+                domini_dirs[alunno] = dir_dominio_alunno
+
+        estensioni_ammesse = (".php", ".html", ".htm", ".css", ".js", ".txt")
+
+        studenti_test, testi_test = similarity.build_texts_from_directories(
+            tests_dirs,
+            estensioni_ammesse,
+        )
+        studenti_domini, testi_domini = similarity.build_texts_from_directories(
+            domini_dirs,
+            estensioni_ammesse,
+        )
+
+        similarity_results.clear()
+
+        if len(studenti_test) >= 2:
+            matrice_test_test = similarity.build_similarity_matrix(studenti_test, testi_test)
+            similarity_results["test_vs_test"] = {
+                "rows": studenti_test,
+                "cols": studenti_test,
+                "matrix": matrice_test_test,
+            }
+        else:
+            matrice_test_test = None
+
+        if len(studenti_domini) >= 2:
+            matrice_dom_dom = similarity.build_similarity_matrix(studenti_domini, testi_domini)
+            similarity_results["dom_vs_dom"] = {
+                "rows": studenti_domini,
+                "cols": studenti_domini,
+                "matrix": matrice_dom_dom,
+            }
+        else:
+            matrice_dom_dom = None
+
+        if len(studenti_test) >= 1 and len(studenti_domini) >= 1:
+            matrice_test_dom = similarity.build_cross_similarity_matrix(
+                studenti_test,
+                studenti_domini,
+                testi_test,
+                testi_domini,
+            )
+            similarity_results["test_vs_dom"] = {
+                "rows": studenti_test,
+                "cols": studenti_domini,
+                "matrix": matrice_test_dom,
+            }
+        else:
+            matrice_test_dom = None
+
+        log("=== Analisi somiglianze avviata ===")
+
+        soglia_alta = 80.0
+        soglia_media = 60.0
+
+        # Report sintetico per ogni studente
+        for nome in sorted(set(list(studenti_test) + list(studenti_domini))):
+            descrizioni = []
+
+            # 1) Verifica contro dominio personale
+            valore_personale = None
+            if matrice_test_dom is not None and nome in studenti_test and nome in studenti_domini:
+                indice_test = studenti_test.index(nome)
+                indice_dom = studenti_domini.index(nome)
+                valore_personale = matrice_test_dom[indice_test][indice_dom]
+                descrizioni.append(
+                    "V vs Dom pers: {:.1f}%".format(valore_personale)
+                )
+
+            # 2) Verifica contro verifiche dei compagni
+            if matrice_test_test is not None and nome in studenti_test:
+                indice = studenti_test.index(nome)
+                miglior = 0.0
+                miglior_nome = ""
+
+                indice_compagno = 0
+                while indice_compagno < len(studenti_test):
+                    if indice_compagno != indice:
+                        valore = matrice_test_test[indice][indice_compagno]
+                        if valore > miglior:
+                            miglior = valore
+                            miglior_nome = studenti_test[indice_compagno]
+                    indice_compagno = indice_compagno + 1
+
+                if miglior_nome:
+                    descrizioni.append(
+                        "V vs V comp: {:.1f}% con {}".format(miglior, miglior_nome)
+                    )
+
+            # 3) Verifica contro domini dei compagni
+            if matrice_test_dom is not None and nome in studenti_test:
+                indice = studenti_test.index(nome)
+                miglior = 0.0
+                miglior_nome = ""
+
+                indice_compagno = 0
+                while indice_compagno < len(studenti_domini):
+                    nome_dom = studenti_domini[indice_compagno]
+                    if nome_dom != nome:
+                        valore = matrice_test_dom[indice][indice_compagno]
+                        if valore > miglior:
+                            miglior = valore
+                            miglior_nome = nome_dom
+                    indice_compagno = indice_compagno + 1
+
+                if miglior_nome:
+                    descrizioni.append(
+                        "V vs Dom comp: {:.1f}% con dominio {}".format(
+                            miglior,
+                            miglior_nome,
+                        )
+                    )
+
+            # 4) Dominio personale contro domini dei compagni
+            if matrice_dom_dom is not None and nome in studenti_domini:
+                indice = studenti_domini.index(nome)
+                miglior = 0.0
+                miglior_nome = ""
+
+                indice_compagno = 0
+                while indice_compagno < len(studenti_domini):
+                    if indice_compagno != indice:
+                        valore = matrice_dom_dom[indice][indice_compagno]
+                        if valore > miglior:
+                            miglior = valore
+                            miglior_nome = studenti_domini[indice_compagno]
+                    indice_compagno = indice_compagno + 1
+
+                if miglior_nome:
+                    descrizioni.append(
+                        "Dom vs Dom comp: {:.1f}% con {}".format(
+                            miglior,
+                            miglior_nome,
+                        )
+                    )
+
+            if not descrizioni:
+                continue
+
+            riga = nome + " -> " + " | ".join(descrizioni)
+            log(riga)
+
+            if valore_personale is not None:
+                if valore_personale >= soglia_alta:
+                    log("  ⚠ Verifica molto simile al dominio personale (possibile riuso intenso del codice online).")
+                elif valore_personale >= soglia_media:
+                    log("  ℹ Verifica moderatamente simile al dominio personale (riuso parziale del codice online possibile).")
+
+        if not similarity_results:
+            log("Nessuna matrice di similarità calcolabile con i dati correnti.")
+            btn_mappa.configure(state="disabled")
+        else:
+            log("=== Analisi somiglianze completata ===")
+            btn_mappa.configure(state="normal")
+
+    # ==================================================================
+    # FUNZIONE: MOSTRA MAPPA DELLE SIMILITUDINI
+    # ==================================================================
+    def mostra_mappa():
+        """
+        Mostra una o più heatmap delle matrici calcolate in 'analizza_somiglianze'.
+        """
+        if not similarity_results:
+            messagebox.showinfo(
+                "Informazione",
+                "Non ci sono risultati di similarità da visualizzare. Esegui prima l'analisi.",
+            )
+            return
+
+        parent = frame
+
+        if "test_vs_test" in similarity_results:
+            dati = similarity_results["test_vs_test"]
+            similarity.show_heatmap(
+                parent,
+                "Verifica vs verifiche compagni",
+                dati["rows"],
+                dati["cols"],
+                dati["matrix"],
+            )
+
+        if "dom_vs_dom" in similarity_results:
+            dati = similarity_results["dom_vs_dom"]
+            similarity.show_heatmap(
+                parent,
+                "Domini personali vs domini compagni",
+                dati["rows"],
+                dati["cols"],
+                dati["matrix"],
+            )
+
+        if "test_vs_dom" in similarity_results:
+            dati = similarity_results["test_vs_dom"]
+            similarity.show_heatmap(
+                parent,
+                "Verifiche vs domini (di tutti)",
+                dati["rows"],
+                dati["cols"],
+                dati["matrix"],
+            )
+
+    # ==================================================================
+    # COLLEGAMENTO PULSANTI
+    # ==================================================================
+    btn_scarica.configure(command=scarica_tutti)
+    btn_analizza.configure(command=analizza_somiglianze)
+    btn_mappa.configure(command=mostra_mappa)
+
+    # ==================================================================
     # AVVIO DEL PROCESSORE DELLA CODA DI AGGIORNAMENTI
-    # ======================================================================
+    # ==================================================================
     process_update_queue()
 
-    # ======================================================================
+    # ==================================================================
     # LAYOUT ELASTICO DELLA FRAME
-    # ======================================================================
+    # ==================================================================
     frame.grid_rowconfigure(1, weight=1)
     frame.grid_columnconfigure(5, weight=1)
 
