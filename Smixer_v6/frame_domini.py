@@ -9,7 +9,7 @@ from datetime import datetime
 
 import similarity
 
-YELLOW_BG = "#fff5cc"
+YELLOW_BG = "#5d0066"
 
 
 def format_bytes(num_bytes):

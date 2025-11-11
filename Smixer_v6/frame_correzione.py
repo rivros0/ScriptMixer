@@ -14,7 +14,7 @@ YELLOW_REPORT_BG = "#fdfdfd"
 
 
 def create_frame_correzione(root, global_config):
-    frame_correzione = tk.Frame(root, bg="white")
+    frame_correzione = tk.Frame(root, bg="#286803")
 
     include_prompt_var = tk.BooleanVar(value=True)
     include_subdir_var = tk.BooleanVar(value=True)

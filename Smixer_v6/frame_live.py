@@ -11,7 +11,7 @@ def create_frame_live(root, global_config):
     """
     Frame modalità LIVE.
     """
-    frame = tk.Frame(root, bg="white")
+    frame = tk.Frame(root, bg="#046276")
 
     # === Directory Remota === #
     lbl_remote = tk.Label(frame, text="Directory remota:", bg="white")
