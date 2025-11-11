@@ -3,169 +3,652 @@ from tkinter import ttk, filedialog, messagebox
 import os
 import csv
 import threading
-from ftplib import FTP, error_perm
+import queue
+from ftplib import FTP
+from datetime import datetime
 
 YELLOW_BG = "#fff5cc"
 
+
+def format_bytes(num_bytes):
+    """
+    Converte un numero di byte in una stringa leggibile (B, KB, MB, GB, ...).
+    """
+    unita = ["B", "KB", "MB", "GB", "TB"]
+    valore = float(num_bytes)
+    indice = 0
+
+    while valore >= 1024.0 and indice < len(unita) - 1:
+        valore = valore / 1024.0
+        indice = indice + 1
+
+    if indice == 0:
+        return str(int(valore)) + " " + unita[indice]
+
+    return "{:.1f} {}".format(valore, unita[indice])
+
+
+def get_versioned_path(percorso_base):
+    """
+    Restituisce un percorso libero applicando un versionamento incrementale.
+    Se il file non esiste usa il nome originale.
+    Se esiste:
+        nome.ext -> nome_v01.ext, poi nome_v02.ext, ecc.
+    """
+    if not os.path.exists(percorso_base):
+        return percorso_base
+
+    base, ext = os.path.splitext(percorso_base)
+    contatore = 1
+
+    while True:
+        nuovo_percorso = "{}_v{:02d}{}".format(base, contatore, ext)
+        if not os.path.exists(nuovo_percorso):
+            return nuovo_percorso
+        contatore = contatore + 1
+
+
 def create_frame_domini(root, global_config):
-    f = tk.Frame(root, bg=YELLOW_BG)
+    """
+    Frame per la gestione dei domini Altervista:
+    - Creazione modello CSV
+    - Caricamento CSV (cognome, dominio, ftp_user, ftp_password)
+    - Associazione cognome -> cartella testXX-cognome
+    - Download FTP (in parallelo) con versionamento dei file
+    - Tabella riepilogativa:
+        Nome alunno, dominio, stato, avanzamento, numero file,
+        elenco file, peso complessivo cartella, ultima modifica
+    - Label in alto a destra con peso complessivo di 00_DominiFTP
+    """
 
-    # === Riga 1: Pulsanti ===
-    btn_carica = tk.Button(f, text="Carica file domini (CSV)", width=25)
-    btn_carica.grid(row=0, column=0, padx=6, pady=6)
+    frame = tk.Frame(root, bg=YELLOW_BG)
 
-    btn_scarica = tk.Button(f, text="Scarica tutti i domini via FTP", width=25, state="disabled")
-    btn_scarica.grid(row=0, column=1, padx=6, pady=6)
+    # ======================================================================
+    # CODA PER AGGIORNAMENTI GUI (usata dai thread worker)
+    # ======================================================================
+    update_queue = queue.Queue()
 
-    btn_analizza = tk.Button(f, text="Analizza somiglianze", width=25, state="disabled")
-    btn_analizza.grid(row=0, column=2, padx=6, pady=6)
+    # ======================================================================
+    # RIGA 0: PULSANTI COMANDI + LABEL PESO TOTALE FTP
+    # ======================================================================
+    btn_modello = tk.Button(frame, text="Crea modello CSV", width=18)
+    btn_modello.grid(row=0, column=0, padx=6, pady=6, sticky="w")
 
-    btn_mappa = tk.Button(f, text="Mostra mappa similitudini", width=25, state="disabled")
-    btn_mappa.grid(row=0, column=3, padx=6, pady=6)
+    btn_carica = tk.Button(frame, text="Carica file domini (CSV)", width=24)
+    btn_carica.grid(row=0, column=1, padx=6, pady=6, sticky="w")
 
-    # === Riga 2: Tabella ===
-    cols = ("Cognome", "Dominio", "FTP user", "FTP password", "Cartella test", "Stato")
-    tree = ttk.Treeview(f, columns=cols, show="headings", height=18)
-    for c in cols:
-        tree.heading(c, text=c)
-        width = 120 if c != "Cognome" else 130
-        tree.column(c, width=width, anchor="center")
-    tree.grid(row=1, column=0, columnspan=4, padx=10, pady=10, sticky="nsew")
+    btn_scarica = tk.Button(frame, text="Scarica tutti i domini via FTP", width=24, state="disabled")
+    btn_scarica.grid(row=0, column=2, padx=6, pady=6, sticky="w")
 
-    vsb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=vsb.set)
-    vsb.grid(row=1, column=4, sticky="ns")
+    btn_analizza = tk.Button(frame, text="Analizza somiglianze", width=24, state="disabled")
+    btn_analizza.grid(row=0, column=3, padx=6, pady=6, sticky="w")
 
-    # === Riga 3: Log ===
-    tk.Label(f, text="Log eventi:", bg=YELLOW_BG).grid(row=2, column=0, sticky="w", padx=6, pady=6)
-    txt_log = tk.Text(f, height=6, width=120)
-    txt_log.grid(row=3, column=0, columnspan=5, padx=10, pady=5, sticky="ew")
+    btn_mappa = tk.Button(frame, text="Mostra mappa similitudini", width=24, state="disabled")
+    btn_mappa.grid(row=0, column=4, padx=6, pady=6, sticky="w")
 
-    def log(msg):
-        txt_log.insert("end", msg + "\n")
+    lbl_peso_totale = tk.Label(
+        frame,
+        text="Totale FTP: 0 B",
+        bg=YELLOW_BG,
+        anchor="e"
+    )
+    lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")
+
+    # ======================================================================
+    # RIGA 1: TABELLA PRINCIPALE
+    # ======================================================================
+    colonne = (
+        "Alunno",
+        "Dominio",
+        "Stato",
+        "Avanzamento",
+        "N. file",
+        "Elenco file",
+        "Peso cartella",
+        "Ultima modifica",
+    )
+
+    tree = ttk.Treeview(frame, columns=colonne, show="headings", height=18)
+
+    for col in colonne:
+        tree.heading(col, text=col)
+
+        if col == "Alunno":
+            tree.column(col, width=120, anchor="center")
+        elif col == "Dominio":
+            tree.column(col, width=180, anchor="center")
+        elif col == "Stato":
+            tree.column(col, width=200, anchor="w")
+        elif col == "Elenco file":
+            tree.column(col, width=260, anchor="w")
+        else:
+            tree.column(col, width=120, anchor="center")
+
+    tree.grid(row=1, column=0, columnspan=6, padx=10, pady=10, sticky="nsew")
+
+    scrollbar_vert = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar_vert.set)
+    scrollbar_vert.grid(row=1, column=6, sticky="ns")
+
+    # ======================================================================
+    # RIGHE 2-3: AREA LOG
+    # ======================================================================
+    tk.Label(frame, text="Log eventi:", bg=YELLOW_BG).grid(row=2, column=0, sticky="w", padx=6, pady=6)
+
+    txt_log = tk.Text(frame, height=6, width=120)
+    txt_log.grid(row=3, column=0, columnspan=7, padx=10, pady=5, sticky="ew")
+
+    def log(messaggio):
+        """
+        Scrive un messaggio nel riquadro log.
+        (Da usare SOLO nel thread principale.)
+        """
+        txt_log.insert("end", messaggio + "\n")
         txt_log.see("end")
 
-    # === CSV loader ===
-    def carica_csv():
-        path = filedialog.askopenfilename(
-            title="Seleziona file CSV con domini",
-            filetypes=[("File CSV", "*.csv"), ("Tutti i file", "*.*")]
+    # ======================================================================
+    # STRUTTURE DATI IN MEMORIA
+    # ======================================================================
+    credenziali_by_item = {}   # item_id -> (ftp_user, ftp_pass)
+    testdir_by_item = {}       # item_id -> cartella test associata
+
+    # ======================================================================
+    # FUNZIONE: CREA MODELLO CSV
+    # ======================================================================
+    def crea_modello_csv():
+        """
+        Crea un file CSV con intestazioni:
+            cognome, dominio, ftp_user, ftp_password
+
+        Se la directory selezionata contiene cartelle testXX-cognome,
+        estrae automaticamente i cognomi.
+        """
+        base_dir = global_config["selected_directory"].get().strip()
+        if os.path.isdir(base_dir):
+            initial_dir = base_dir
+        else:
+            initial_dir = os.getcwd()
+
+        percorso_csv = filedialog.asksaveasfilename(
+            title="Salva modello CSV",
+            defaultextension=".csv",
+            initialdir=initial_dir,
+            filetypes=[("File CSV", "*.csv"), ("Tutti i file", "*.*")],
         )
-        if not path:
+
+        if not percorso_csv:
             return
 
-        # pulizia tabella
-        for i in tree.get_children():
-            tree.delete(i)
+        cognomi = []
+
+        if os.path.isdir(base_dir):
+            elementi = os.listdir(base_dir)
+            for nome_dir in elementi:
+                percorso_dir = os.path.join(base_dir, nome_dir)
+                if os.path.isdir(percorso_dir) and nome_dir.lower().startswith("test"):
+                    parti = nome_dir.split("-", 1)
+                    if len(parti) == 2:
+                        cognome = parti[1].strip().lower()
+                        if cognome:
+                            cognomi.append(cognome)
+
+        try:
+            with open(percorso_csv, "w", newline="", encoding="utf-8") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["cognome", "dominio", "ftp_user", "ftp_password"])
+
+                insieme_cognomi = sorted(set(cognomi))
+                for cognome in insieme_cognomi:
+                    writer.writerow([cognome, "", "", ""])
+
+            log("Modello CSV creato in: " + percorso_csv)
+            if cognomi:
+                log("Inseriti automaticamente {} cognomi dalle cartelle test.".format(len(set(cognomi))))
+            else:
+                log("Nessuna cartella test trovata: modello creato solo con intestazioni.")
+        except Exception as e:
+            messagebox.showerror("Errore", "Errore nella creazione del modello CSV:\n" + str(e))
+
+    btn_modello.configure(command=crea_modello_csv)
+
+    # ======================================================================
+    # FUNZIONE: CARICA CSV
+    # ======================================================================
+    def carica_csv():
+        """
+        Carica un CSV con colonne:
+            cognome, dominio, ftp_user, ftp_password
+
+        Popola la tabella con:
+            Alunno, Dominio, Stato iniziale (Test OK / Test non trovato),
+            Avanzamento=0%, N. file=0, Elenco file vuoto,
+            Peso=0 B, Ultima modifica vuota.
+
+        Le password NON vengono mostrate, ma vengono salvate in memoria
+        in 'credenziali_by_item'.
+        """
+        for item in tree.get_children():
+            tree.delete(item)
+        credenziali_by_item.clear()
+        testdir_by_item.clear()
+        btn_scarica.configure(state="disabled")
 
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning("Attenzione", "Seleziona prima la directory principale delle prove (cartelle testXX).")
+            messagebox.showwarning(
+                "Attenzione",
+                "Seleziona prima la directory principale delle prove (cartelle testXX)."
+            )
             return
 
-        test_dirs = [d for d in os.listdir(base_dir) if d.lower().startswith("test") and os.path.isdir(os.path.join(base_dir, d))]
-        log(f"Trovate {len(test_dirs)} cartelle test nella directory selezionata.")
+        percorso_csv = filedialog.askopenfilename(
+            title="Seleziona file CSV con domini",
+            filetypes=[("File CSV", "*.csv"), ("Tutti i file", "*.*")],
+        )
+
+        if not percorso_csv:
+            return
+
+        test_dirs = []
+        for nome_dir in os.listdir(base_dir):
+            percorso_dir = os.path.join(base_dir, nome_dir)
+            if os.path.isdir(percorso_dir) and nome_dir.lower().startswith("test"):
+                test_dirs.append(nome_dir)
+
+        log("Trovate {} cartelle test nella directory selezionata.".format(len(test_dirs)))
 
         try:
-            with open(path, newline='', encoding="utf-8") as csvfile:
+            with open(percorso_csv, newline="", encoding="utf-8") as csvfile:
                 reader = csv.DictReader(csvfile)
-                for row in reader:
-                    cognome = row.get("cognome", "").strip().lower()
-                    dominio = row.get("dominio", "").strip()
-                    ftp_user = row.get("ftp_user", "").strip()
-                    ftp_pass = row.get("ftp_password", "").strip()
-
-                    found_test = ""
-                    stato = "⚠️ Non trovata"
-                    for td in test_dirs:
-                        if td.lower().endswith(cognome):
-                            found_test = td
-                            stato = "✅ Associata"
-                            break
-
-                    tree.insert("", "end", values=(cognome, dominio, ftp_user, ftp_pass, found_test, stato))
-
-                log(f"File CSV '{os.path.basename(path)}' caricato correttamente.")
-                btn_scarica.configure(state="normal")
+                righe = list(reader)
         except Exception as e:
-            messagebox.showerror("Errore", f"Errore nella lettura del CSV:\n{e}")
+            messagebox.showerror("Errore", "Errore nella lettura del CSV:\n" + str(e))
             return
+
+        if not righe:
+            messagebox.showwarning("Attenzione", "Il CSV selezionato non contiene righe.")
+            return
+
+        righe_inserite = 0
+
+        for row in righe:
+            cognome = row.get("cognome", "").strip().lower()
+            dominio = row.get("dominio", "").strip()
+            ftp_user = row.get("ftp_user", "").strip()
+            ftp_pass = row.get("ftp_password", "").strip()
+
+            if not cognome and not dominio:
+                continue
+
+            found_test = ""
+            stato_iniziale = "Test non trovato"
+
+            for td in test_dirs:
+                if td.lower().endswith(cognome):
+                    found_test = td
+                    stato_iniziale = "Test OK"
+                    break
+
+            valori = (
+                cognome,        # Alunno
+                dominio,        # Dominio
+                stato_iniziale, # Stato
+                "0%",           # Avanzamento
+                "0",            # N. file
+                "",             # Elenco file
+                "0 B",          # Peso cartella
+                "",             # Ultima modifica
+            )
+
+            item_id = tree.insert("", "end", values=valori)
+            credenziali_by_item[item_id] = (ftp_user, ftp_pass)
+            testdir_by_item[item_id] = found_test
+            righe_inserite = righe_inserite + 1
+
+        log(
+            "File CSV '{}' caricato correttamente. Righe valide: {}".format(
+                os.path.basename(percorso_csv),
+                righe_inserite
+            )
+        )
+
+        if righe_inserite > 0:
+            btn_scarica.configure(state="normal")
+            log("Bottone download FTP abilitato ({} domini caricati).".format(righe_inserite))
+        else:
+            btn_scarica.configure(state="disabled")
+            messagebox.showwarning("Attenzione", "Nessuna riga valida trovata nel CSV.")
 
     btn_carica.configure(command=carica_csv)
 
-    # === Download FTP ===
-    def scarica_tutti():
+    # ======================================================================
+    # FUNZIONE: RICALCOLO PESO TOTALE DIRECTORY 00_DominiFTP
+    # ======================================================================
+    def aggiorna_peso_totale_ftp():
+        """
+        Calcola il peso complessivo della directory 00_DominiFTP
+        e aggiorna la label in alto a destra.
+        """
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning("Attenzione", "Seleziona prima la directory principale delle prove (cartelle testXX).")
+            lbl_peso_totale.config(text="Totale FTP: 0 B")
             return
 
-        destinazione = os.path.join(base_dir, "00_DominiFTP")
-        os.makedirs(destinazione, exist_ok=True)
+        dir_ftp = os.path.join(base_dir, "00_DominiFTP")
+        if not os.path.isdir(dir_ftp):
+            lbl_peso_totale.config(text="Totale FTP: 0 B")
+            return
+
+        totale = 0
+        for radice, _, files in os.walk(dir_ftp):
+            for nome_file in files:
+                percorso_file = os.path.join(radice, nome_file)
+                try:
+                    totale = totale + os.path.getsize(percorso_file)
+                except Exception:
+                    pass
+
+        lbl_peso_totale.config(text="Totale FTP: " + format_bytes(totale))
+
+    # ======================================================================
+    # FUNZIONE: PROCESSO CENTRALE CHE LEGGE LA CODA E AGGIORNA LA GUI
+    # ======================================================================
+    def process_update_queue():
+        """
+        Legge gli aggiornamenti dalla coda e li applica alla GUI.
+        Viene richiamata periodicamente tramite after().
+        """
+        try:
+            while True:
+                task = update_queue.get_nowait()
+                tipo = task[0]
+
+                if tipo == "log":
+                    messaggio = task[1]
+                    log(messaggio)
+
+                elif tipo == "set":
+                    item_id = task[1]
+                    colonna = task[2]
+                    valore = task[3]
+                    try:
+                        tree.set(item_id, colonna, valore)
+                    except Exception:
+                        pass
+
+                elif tipo == "fine_download":
+                    aggiorna_peso_totale_ftp()
+                    log("=== Download FTP completato ===")
+                    btn_scarica.configure(state="normal")
+                    btn_analizza.configure(state="normal")
+
+        except queue.Empty:
+            pass
+
+        frame.after(100, process_update_queue)
+
+    # ======================================================================
+    # FUNZIONE: DOWNLOAD FTP DI TUTTI I DOMINI (IN PARALLELO)
+    # ======================================================================
+    def scarica_tutti():
+        """
+        Per ogni riga in tabella:
+        - prepara un job con i dati necessari
+        - lancia un thread worker per ciascun job (in parallelo)
+        - i thread lavorano sull'FTP e mandano gli aggiornamenti GUI sulla coda
+        - un thread "monitor" attende la fine di tutti i worker e manda
+          in coda l'evento "fine_download".
+        """
+        base_dir = global_config["selected_directory"].get().strip()
+        if not base_dir or not os.path.isdir(base_dir):
+            messagebox.showwarning(
+                "Attenzione",
+                "Seleziona prima la directory principale delle prove (cartelle testXX)."
+            )
+            return
 
         items = tree.get_children()
         if not items:
             messagebox.showwarning("Attenzione", "Nessun dominio da scaricare. Carica prima il CSV.")
             return
 
-        log(f"=== Inizio download FTP in {destinazione} ===")
+        dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
+        if not os.path.isdir(dir_ftp_base):
+            os.makedirs(dir_ftp_base, exist_ok=True)
 
-        def thread_worker():
-            for item in items:
-                valori = tree.item(item, "values")
-                cognome, dominio, ftp_user, ftp_pass = valori[0], valori[1], valori[2], valori[3]
-                host = dominio
-                if not host.startswith("ftp."):
-                    host = f"ftp.{host}"
+        log("=== Inizio download FTP in {} ===".format(dir_ftp_base))
+        btn_scarica.configure(state="disabled")
 
-                local_dir = os.path.join(destinazione, cognome)
-                os.makedirs(local_dir, exist_ok=True)
+        # prepara lista di job (lettura dei dati SOLO nel main thread)
+        jobs = []
+        for item_id in items:
+            valori_correnti = list(tree.item(item_id, "values"))
+            alunno = valori_correnti[0]
+            dominio = valori_correnti[1]
+            stato_base = valori_correnti[2]
+            ftp_user, ftp_pass = credenziali_by_item.get(item_id, ("", ""))
 
-                log(f"Connessione a {host}...")
+            job = {
+                "item_id": item_id,
+                "alunno": alunno,
+                "dominio": dominio,
+                "stato_base": stato_base,
+                "ftp_user": ftp_user,
+                "ftp_pass": ftp_pass,
+            }
+            jobs.append(job)
+
+        def worker_job(job):
+            """
+            Thread worker per un singolo dominio.
+            Fa TUTTO il lavoro di FTP e invia aggiornamenti alla GUI
+            tramite la coda 'update_queue'.
+            """
+            item_id = job["item_id"]
+            alunno = job["alunno"]
+            dominio = job["dominio"]
+            stato_base = job["stato_base"]
+            ftp_user = job["ftp_user"]
+            ftp_pass = job["ftp_pass"]
+
+            host = dominio
+            if host and not host.startswith("ftp."):
+                host = "ftp." + host
+
+            # reset campi di avanzamento (tramite coda)
+            update_queue.put(("set", item_id, "Stato", stato_base + " / Connessione FTP..."))
+            update_queue.put(("set", item_id, "Avanzamento", "0%"))
+            update_queue.put(("set", item_id, "N. file", "0"))
+            update_queue.put(("set", item_id, "Elenco file", ""))
+            update_queue.put(("set", item_id, "Peso cartella", "0 B"))
+            update_queue.put(("set", item_id, "Ultima modifica", ""))
+
+            if not dominio:
+                update_queue.put(("log", "❌ Nessun dominio specificato per '{}'.".format(alunno)))
+                update_queue.put(("set", item_id, "Stato", "Errore: dominio mancante"))
+                return
+
+            if not ftp_user or not ftp_pass:
+                update_queue.put(("log", "❌ Credenziali mancanti per '{}' ({}).".format(alunno, dominio)))
+                update_queue.put(("set", item_id, "Stato", "Errore: credenziali mancanti"))
+                return
+
+            update_queue.put(("log", "Connessione a {} per '{}'...".format(host, alunno)))
+
+            try:
+                ftp = FTP(host, timeout=30, encoding="latin-1")
+                ftp.login(user=ftp_user, passwd=ftp_pass)
+                update_queue.put(("set", item_id, "Stato", stato_base + " / Login OK"))
+                update_queue.put(("log", "✅ Login riuscito su {} per '{}'".format(host, alunno)))
+            except Exception as e:
+                update_queue.put(("set", item_id, "Stato", "Errore login FTP"))
+                update_queue.put(("log", "❌ Errore di connessione/login {} per '{}': {}".format(host, alunno, e)))
+                return
+
+            nome_cartella_alunno = alunno if alunno else "sconosciuto"
+            dir_locale_alunno = os.path.join(dir_ftp_base, nome_cartella_alunno)
+            if not os.path.isdir(dir_locale_alunno):
                 try:
-                    ftp = FTP(host, timeout=30)
-                    ftp.login(user=ftp_user, passwd=ftp_pass)
-                    log(f"✅ Login riuscito su {host}")
-                except Exception as e:
-                    log(f"❌ Errore di connessione/login {host}: {e}")
+                    os.makedirs(dir_locale_alunno, exist_ok=True)
+                except Exception:
+                    pass
+
+            lista_file_remoti = []
+            ultima_modifica = None
+
+            def collect_files(percorso_remoto):
+                nonlocal ultima_modifica
+
+                try:
+                    entries = list(ftp.mlsd(percorso_remoto))
+                except Exception:
+                    try:
+                        ftp.cwd(percorso_remoto)
+                        nomi = ftp.nlst()
+                    except Exception:
+                        return
+                    for nome in nomi:
+                        if nome not in (".", ".."):
+                            if percorso_remoto in (".", ""):
+                                remoto = nome
+                            else:
+                                remoto = percorso_remoto + "/" + nome
+                            lista_file_remoti.append(remoto)
+                    return
+
+                for nome, facts in entries:
+                    if nome in (".", ".."):
+                        continue
+
+                    tipo = facts.get("type", "")
+                    if percorso_remoto in (".", ""):
+                        remoto = nome
+                    else:
+                        remoto = percorso_remoto + "/" + nome
+
+                    if tipo == "dir":
+                        collect_files(remoto)
+                    else:
+                        lista_file_remoti.append(remoto)
+                        modify = facts.get("modify")
+                        if modify:
+                            try:
+                                data = datetime.strptime(modify, "%Y%m%d%H%M%S")
+                                if ultima_modifica is None or data > ultima_modifica:
+                                    ultima_modifica = data
+                            except Exception:
+                                pass
+
+            collect_files(".")
+
+            totale_file = len(lista_file_remoti)
+            if totale_file == 0:
+                update_queue.put(("set", item_id, "Stato", stato_base + " / Nessun file remoto"))
+                update_queue.put(("log", "ℹ Nessun file trovato su {} per '{}'".format(dominio, alunno)))
+                try:
+                    ftp.quit()
+                except Exception:
+                    pass
+                return
+
+            conteggio_file = 0
+            peso_totale_alunno = 0
+            elenco_file_preview = []
+
+            for remoto in lista_file_remoti:
+                parti = remoto.split("/")
+                cartella_locale_corrente = dir_locale_alunno
+
+                for nome_dir in parti[:-1]:
+                    cartella_locale_corrente = os.path.join(cartella_locale_corrente, nome_dir)
+                    if not os.path.isdir(cartella_locale_corrente):
+                        try:
+                            os.makedirs(cartella_locale_corrente, exist_ok=True)
+                        except Exception:
+                            pass
+
+                nome_file = parti[-1]
+                percorso_locale_base = os.path.join(cartella_locale_corrente, nome_file)
+                percorso_locale = get_versioned_path(percorso_locale_base)
+
+                try:
+                    with open(percorso_locale, "wb") as f_locale:
+                        ftp.retrbinary("RETR " + remoto, f_locale.write)
+                except Exception:
                     continue
 
-                def recursive_download(path="."):
-                    try:
-                        ftp.cwd(path)
-                        files = ftp.nlst()
-                        for nome in files:
-                            try:
-                                ftp.cwd(nome)
-                                ftp.cwd("..")
-                                new_path = os.path.join(local_dir, nome)
-                                os.makedirs(new_path, exist_ok=True)
-                                recursive_download(nome)
-                                ftp.cwd("..")
-                            except error_perm:
-                                local_file = os.path.join(local_dir, nome)
-                                with open(local_file, "wb") as f:
-                                    ftp.retrbinary(f"RETR {nome}", f.write)
-                    except Exception:
-                        pass
-
                 try:
-                    recursive_download(".")
-                    ftp.quit()
-                    log(f"✅ Download completato per {cognome} ({dominio})\n")
-                except Exception as e:
-                    log(f"❌ Errore durante il download di {cognome}: {e}\n")
+                    dimensione = os.path.getsize(percorso_locale)
+                    peso_totale_alunno = peso_totale_alunno + dimensione
+                except Exception:
+                    pass
 
-            log("=== Download FTP completato ===")
-            btn_analizza.configure(state="normal")
+                conteggio_file = conteggio_file + 1
 
-        threading.Thread(target=thread_worker, daemon=True).start()
+                if len(elenco_file_preview) < 10:
+                    elenco_file_preview.append(os.path.basename(percorso_locale))
+                elif len(elenco_file_preview) == 10:
+                    elenco_file_preview.append("...")
+
+                percentuale = int((conteggio_file * 100) / float(totale_file))
+
+                update_queue.put(("set", item_id, "Avanzamento", "{}%".format(percentuale)))
+                update_queue.put(("set", item_id, "N. file", str(conteggio_file)))
+                update_queue.put(("set", item_id, "Peso cartella", format_bytes(peso_totale_alunno)))
+                update_queue.put(("set", item_id, "Elenco file", ", ".join(elenco_file_preview)))
+
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+
+            if ultima_modifica is not None:
+                testo_data = ultima_modifica.strftime("%Y-%m-%d %H:%M")
+            else:
+                testo_data = "n.d."
+
+            update_queue.put(("set", item_id, "Ultima modifica", testo_data))
+            update_queue.put(("set", item_id, "Stato", stato_base + " / Download OK"))
+            update_queue.put(
+                ("log",
+                 "✅ Download completato per '{}' ({}). Ultima modifica remota: {}".format(
+                     alunno,
+                     dominio,
+                     testo_data
+                 ))
+            )
+
+        # avvio di tutti i worker in parallelo
+        threads = []
+        for job in jobs:
+            t = threading.Thread(target=worker_job, args=(job,))
+            t.daemon = True
+            t.start()
+            threads.append(t)
+
+        def monitor_thread():
+            indice = 0
+            while indice < len(threads):
+                threads[indice].join()
+                indice = indice + 1
+            update_queue.put(("fine_download", None))
+
+        monitor = threading.Thread(target=monitor_thread, daemon=True)
+        monitor.start()
 
     btn_scarica.configure(command=scarica_tutti)
 
-    f.grid_rowconfigure(1, weight=1)
-    f.grid_columnconfigure(3, weight=1)
+    # ======================================================================
+    # AVVIO DEL PROCESSORE DELLA CODA DI AGGIORNAMENTI
+    # ======================================================================
+    process_update_queue()
+
+    # ======================================================================
+    # LAYOUT ELASTICO DELLA FRAME
+    # ======================================================================
+    frame.grid_rowconfigure(1, weight=1)
+    frame.grid_columnconfigure(5, weight=1)
 
     log("Frame domini attivo. In attesa di caricamento CSV...")
 
-    return f
+    return frame
