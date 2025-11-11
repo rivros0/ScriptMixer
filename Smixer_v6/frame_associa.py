@@ -1,3 +1,12 @@
+# associa.py
+# Finestra per associare EMAIL ↔ cartelle test*, con:
+# - logica di Smixer_v6 (liste filtrate, dissocia, associa in ordine, ecc.)
+# - directory di lavoro presa da selected_directory (come v6),
+#   con fallback a remote_directory se selected_directory non esiste
+# - tabella associazioni con colonne: EMAIL | CARTELLA (invertite)
+# - rinomina cartelle con schema: "email test"
+#   -> local_part(email) + "__" + base_name_cartella
+
 import os
 import tkinter as tk
 from tkinter import messagebox, Scrollbar, ttk
@@ -6,10 +15,7 @@ from tkinter import messagebox, Scrollbar, ttk
 def _email_local_part(email: str) -> str:
     """
     Restituisce solo la parte locale dell'email (prima della @).
-
-    Esempio:
-      'nome.cognome@pantanelli-monnet.edu.it' -> 'nome.cognome'
-
+    Esempio: 'nome.cognome@pantanelli-monnet.edu.it' -> 'nome.cognome'
     Se non c'è '@', restituisce la stringa così com'è.
     """
     email = email.strip()
@@ -21,21 +27,20 @@ def _email_local_part(email: str) -> str:
 
 def open_associa_window(root, global_config):
     """
-    Finestra per associare gli indirizzi email degli alunni
-    alle cartelle di test della directory locale selezionata.
+    Finestra per associare gli indirizzi email degli alunni alle cartelle di test
+    della directory locale selezionata.
 
-    Struttura:
-
-      - Riga 0: label con directory di lavoro.
-      - Riga 1: label "Incolla qui le email..."
-      - Riga 2: Text per incollare email (3 righe) + pulsante "Aggiorna lista email".
-      - Riga 3: label sopra le due liste (Cartelle a sinistra, Email a destra).
-      - Riga 4: tre colonne:
-            colonna 0: Listbox cartelle test
-            colonna 1: pulsanti (refresh, associa, associa in ordine, dissocia, applica)
-            colonna 2: Listbox email (senza dominio)
-      - Riga 5: label "Associazioni"
-      - Riga 6: tabella con cartella ↔ email (solo parte prima di @).
+    Struttura (come Smixer_v6):
+    - Riga 0: label con directory di lavoro.
+    - Riga 1: label "Incolla qui le email..."
+    - Riga 2: Text per incollare email (3 righe) + pulsante "Aggiorna lista email".
+    - Riga 3: label sopra le due liste (Cartelle a sinistra, Email a destra).
+    - Riga 4: tre colonne:
+        colonna 0: Listbox cartelle test
+        colonna 1: pulsanti (refresh, associa, associa in ordine, dissocia, applica)
+        colonna 2: Listbox email (senza dominio)
+    - Riga 5: label "Associazioni"
+    - Riga 6: tabella con associazioni (EMAIL | CARTELLA).
 
     Le liste mostrano solo gli elementi NON ancora associati.
     Le cartelle già associate (e le email già associate) restano solo nella tabella.
@@ -48,9 +53,8 @@ def open_associa_window(root, global_config):
     window.configure(bg="white")
 
     # ======================================================================
-    #  VARIABILI DI STATO
+    # VARIABILI DI STATO
     # ======================================================================
-
     base_dir_var = tk.StringVar()
 
     # Tutte le email presenti nel Text (forma completa con dominio)
@@ -63,19 +67,24 @@ def open_associa_window(root, global_config):
     associations = {}
 
     # ======================================================================
-    #  FUNZIONI DI SUPPORTO
+    # FUNZIONI DI SUPPORTO
     # ======================================================================
-
     def get_current_base_dir():
         """
-        Restituisce la directory locale selezionata (selected_directory),
-        oppure stringa vuota se non impostata o 'nessuna'.
+        Restituisce la directory locale selezionata:
+        - prima prova con selected_directory (come in Smixer_v6)
+        - se non esiste o è vuota/nessuna, prova con remote_directory
         """
         selected_var = global_config.get("selected_directory")
-        if selected_var is None:
-            return ""
+        path = ""
 
-        path = selected_var.get().strip()
+        if selected_var is not None:
+            path = selected_var.get().strip()
+        else:
+            remote_var = global_config.get("remote_directory")
+            if remote_var is not None:
+                path = remote_var.get().strip()
+
         if not path:
             return ""
 
@@ -90,7 +99,6 @@ def open_associa_window(root, global_config):
         Aggiorna la label che mostra la directory di lavoro corrente.
         """
         base_dir = get_current_base_dir()
-
         if not base_dir:
             base_dir_var.set("Directory di lavoro: (nessuna)")
         else:
@@ -105,7 +113,6 @@ def open_associa_window(root, global_config):
 
         raw = text_emails.get("1.0", "end")
         lines = raw.splitlines()
-
         emails = []
         index = 0
         while index < len(lines):
@@ -128,7 +135,6 @@ def open_associa_window(root, global_config):
         base_dir = get_current_base_dir()
         if not base_dir:
             return
-
         if not os.path.isdir(base_dir):
             return
 
@@ -137,7 +143,6 @@ def open_associa_window(root, global_config):
             full_path = os.path.join(base_dir, entry)
             if os.path.isdir(full_path) and entry != "00_MixOutput":
                 all_folders.append(entry)
-
         all_folders.sort()
 
     def get_remaining_emails():
@@ -179,7 +184,6 @@ def open_associa_window(root, global_config):
         e solo la parte prima di '@'.
         """
         listbox_emails.delete(0, "end")
-
         remaining = get_remaining_emails()
 
         if not all_emails_full:
@@ -202,7 +206,6 @@ def open_associa_window(root, global_config):
         Aggiorna la Listbox delle cartelle test mostrando solo quelle non associate.
         """
         listbox_folders.delete(0, "end")
-
         remaining = get_remaining_folders()
 
         if not all_folders:
@@ -221,11 +224,11 @@ def open_associa_window(root, global_config):
 
     def refresh_mapping_tree():
         """
-        Aggiorna la tabella delle associazioni cartella ↔ email.
+        Aggiorna la tabella delle associazioni.
+        Colonne invertite: EMAIL | CARTELLA
         Nella colonna email viene mostrata solo la parte prima di '@'.
         """
         tree_mapping.delete(*tree_mapping.get_children())
-
         cartelle = list(associations.keys())
         cartelle.sort()
 
@@ -234,10 +237,11 @@ def open_associa_window(root, global_config):
             folder_name = cartelle[index]
             email_value = associations[folder_name]
             local_part = _email_local_part(email_value)
+            # Colonne: EMAIL (0), CARTELLA (1)
             tree_mapping.insert(
                 "",
                 "end",
-                values=(folder_name, local_part),
+                values=(local_part, folder_name),
             )
             index = index + 1
 
@@ -261,8 +265,7 @@ def open_associa_window(root, global_config):
     def on_associate_selected():
         """
         Associa l'email selezionata (Lista a destra) alla cartella selezionata
-        (Lista a sinistra). Aggiorna 'associations' e rinfresca
-        liste e tabella.
+        (Lista a sinistra). Aggiorna 'associations' e rinfresca liste e tabella.
         """
         # selezione cartella test (a sinistra)
         selection_folder = listbox_folders.curselection()
@@ -275,7 +278,6 @@ def open_associa_window(root, global_config):
 
         folder_index = selection_folder[0]
         remaining_folders = get_remaining_folders()
-
         if folder_index < 0 or folder_index >= len(remaining_folders):
             messagebox.showwarning(
                 "Attenzione",
@@ -296,7 +298,6 @@ def open_associa_window(root, global_config):
 
         email_index = selection_email[0]
         remaining_emails = get_remaining_emails()
-
         if email_index < 0 or email_index >= len(remaining_emails):
             messagebox.showwarning(
                 "Attenzione",
@@ -317,12 +318,13 @@ def open_associa_window(root, global_config):
     def on_associate_sequential():
         """
         Associazione automatica in ordine:
-          1ª cartella disponibile -> 1ª email disponibile
-          2ª cartella disponibile -> 2ª email disponibile
-          e così via.
+        1ª cartella disponibile -> 1ª email disponibile
+        2ª cartella disponibile -> 2ª email disponibile
+        e così via.
+
+        NON chiude la finestra.
         """
         base_dir = get_current_base_dir()
-
         if not base_dir or not os.path.isdir(base_dir):
             messagebox.showwarning(
                 "Attenzione",
@@ -339,7 +341,6 @@ def open_associa_window(root, global_config):
 
         remaining_folders = get_remaining_folders()
         remaining_emails = get_remaining_emails()
-
         if not remaining_folders or not remaining_emails:
             messagebox.showwarning(
                 "Attenzione",
@@ -366,6 +367,7 @@ def open_associa_window(root, global_config):
             "Associazione in ordine",
             "Create " + str(max_count) + " associazioni in ordine.",
         )
+        # la finestra resta aperta
 
     def on_dissociate():
         """
@@ -382,14 +384,15 @@ def open_associa_window(root, global_config):
 
         item_id = selected_items[0]
         values = tree_mapping.item(item_id, "values")
-        if not values or len(values) < 1:
+        if not values or len(values) < 2:
             messagebox.showwarning(
                 "Attenzione",
                 "Selezione non valida nella tabella delle associazioni.",
             )
             return
 
-        folder_name = values[0]
+        # Colonne: EMAIL (0), CARTELLA (1)
+        folder_name = values[1]
 
         if folder_name in associations:
             del associations[folder_name]
@@ -402,6 +405,9 @@ def open_associa_window(root, global_config):
         """
         Applica le associazioni rinominando fisicamente le cartelle.
         Nel nome della cartella viene usata solo la parte prima della '@'.
+
+        Nuovo schema di concatenazione:
+        - email test  -> local_part(email) + "__" + base_name_cartella
         """
         base_dir = get_current_base_dir()
         if not base_dir:
@@ -434,7 +440,7 @@ def open_associa_window(root, global_config):
         while index < len(cartelle):
             folder_name = cartelle[index]
             email_value = associations[folder_name]
-            line = folder_name + "  ->  " + email_value
+            line = folder_name + " -> " + email_value
             lines.append(line)
             index = index + 1
 
@@ -445,9 +451,9 @@ def open_associa_window(root, global_config):
             "Verranno rinominate le seguenti cartelle:\n\n"
             + riepilogo
             + "\n\nNel nome cartella verrà usata SOLO la parte prima di '@'.\n\n"
+            + "Schema: email test (es. nome.cognome__test01)\n\n"
             + "Procedere?",
         )
-
         if not conferma:
             return
 
@@ -466,7 +472,9 @@ def open_associa_window(root, global_config):
                 base_name = old_name
 
             local_part = _email_local_part(email_value)
-            new_name = base_name + "__" + local_part
+
+            # NUOVO NOME: email test -> local_part__base_name
+            new_name = local_part + "__" + base_name
 
             old_path = os.path.join(base_dir, old_name)
             new_path = os.path.join(base_dir, new_name)
@@ -506,18 +514,14 @@ def open_associa_window(root, global_config):
 
         messagebox.showinfo(
             "Operazione completata",
-            "Cartelle rinominate: "
-            + str(rinominate)
-            + "\nEventuali errori: "
-            + str(errori),
+            "Cartelle rinominate: " + str(rinominate)
+            + "\nEventuali errori: " + str(errori),
         )
 
     # ======================================================================
-    #  LAYOUT: RIGA 0 - Directory di lavoro
+    # LAYOUT: RIGA 0 - Directory di lavoro
     # ======================================================================
-
     update_base_dir_label()
-
     lbl_base_dir = tk.Label(
         window,
         textvariable=base_dir_var,
@@ -527,9 +531,8 @@ def open_associa_window(root, global_config):
     lbl_base_dir.grid(row=0, column=0, columnspan=3, sticky="ew", padx=10, pady=10)
 
     # ======================================================================
-    #  LAYOUT: RIGA 1-2 - Text email (3 righe) + pulsante "Aggiorna lista email"
+    # LAYOUT: RIGA 1-2 - Text email (3 righe) + pulsante "Aggiorna lista email"
     # ======================================================================
-
     lbl_emails_text = tk.Label(
         window,
         text="Incolla qui le email (una per riga):",
@@ -541,7 +544,7 @@ def open_associa_window(root, global_config):
     text_emails = tk.Text(
         window,
         width=60,
-        height=3,   # altezza ridotta a 3 righe
+        height=3,  # altezza ridotta a 3 righe
     )
     text_emails.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=10, pady=5)
 
@@ -554,9 +557,8 @@ def open_associa_window(root, global_config):
     btn_update_email_list.grid(row=2, column=2, sticky="n", padx=10, pady=5)
 
     # ======================================================================
-    #  LAYOUT: RIGA 3-4 - Cartelle (sx) | pulsanti | Email (dx)
+    # LAYOUT: RIGA 3-4 - Cartelle (sx) | pulsanti | Email (dx)
     # ======================================================================
-
     lbl_folders = tk.Label(
         window,
         text="Cartelle test nella directory di lavoro:",
@@ -585,7 +587,11 @@ def open_associa_window(root, global_config):
     )
     listbox_folders.pack(side="left", fill="both", expand=True)
 
-    scroll_folders = Scrollbar(frame_folders_list, orient="vertical", command=listbox_folders.yview)
+    scroll_folders = Scrollbar(
+        frame_folders_list,
+        orient="vertical",
+        command=listbox_folders.yview,
+    )
     scroll_folders.pack(side="right", fill="y")
     listbox_folders.config(yscrollcommand=scroll_folders.set)
 
@@ -650,17 +656,20 @@ def open_associa_window(root, global_config):
     )
     listbox_emails.pack(side="left", fill="both", expand=True)
 
-    scroll_emails = Scrollbar(frame_emails_list, orient="vertical", command=listbox_emails.yview)
+    scroll_emails = Scrollbar(
+        frame_emails_list,
+        orient="vertical",
+        command=listbox_emails.yview,
+    )
     scroll_emails.pack(side="right", fill="y")
     listbox_emails.config(yscrollcommand=scroll_emails.set)
 
     # ======================================================================
-    #  LAYOUT: RIGA 5-6 - Tabella associazioni
+    # LAYOUT: RIGA 5-6 - Tabella associazioni (EMAIL | CARTELLA)
     # ======================================================================
-
     lbl_mapping = tk.Label(
         window,
-        text="Associazioni (cartella ↔ email):",
+        text="Associazioni (email ↔ cartella):",
         bg="white",
         anchor="w",
     )
@@ -669,18 +678,17 @@ def open_associa_window(root, global_config):
     mapping_frame = tk.Frame(window, bg="white")
     mapping_frame.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=5)
 
+    # Colonne invertite: EMAIL, CARTELLA
     tree_mapping = ttk.Treeview(
         mapping_frame,
-        columns=("cartella", "email"),
+        columns=("email", "cartella"),
         show="headings",
         height=6,
     )
-    tree_mapping.heading("cartella", text="Cartella")
     tree_mapping.heading("email", text="Email (prima di '@')")
-
-    tree_mapping.column("cartella", width=200, anchor="w")
+    tree_mapping.heading("cartella", text="Cartella")
     tree_mapping.column("email", width=600, anchor="w")
-
+    tree_mapping.column("cartella", width=200, anchor="w")
     tree_mapping.pack(side="left", fill="both", expand=True)
 
     scroll_mapping = Scrollbar(mapping_frame, orient="vertical", command=tree_mapping.yview)
@@ -688,13 +696,11 @@ def open_associa_window(root, global_config):
     tree_mapping.config(yscrollcommand=scroll_mapping.set)
 
     # ======================================================================
-    #  CONFIGURAZIONE PESI (ridimensionamento finestra)
+    # CONFIGURAZIONE PESI (ridimensionamento finestra)
     # ======================================================================
-
     window.grid_rowconfigure(2, weight=0)
     window.grid_rowconfigure(4, weight=1)
     window.grid_rowconfigure(6, weight=1)
-
     window.grid_columnconfigure(0, weight=1)
     window.grid_columnconfigure(1, weight=0)
     window.grid_columnconfigure(2, weight=1)
