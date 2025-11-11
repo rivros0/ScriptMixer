@@ -3,7 +3,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],                # file principale
+    ['SMX.py'],                # file principale
     pathex=['.'],
     binaries=[],
     datas=[
@@ -30,7 +30,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='Smixer V7',               # nome eseguibile
+    name='SMX v082',               # nome eseguibile
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
