@@ -43,20 +43,36 @@ def wrap_preserve_indent(text: str, width: int) -> str:
 
 def _resolve_base_directory(directory_source) -> str:
     """
-    Ritorna la directory di lavoro a partire da:
-    - una stringa
-    - oppure da una Label (usata in alcune schede)
-    - oppure da qualunque altro oggetto convertibile in stringa.
+    Accetta:
+      - una stringa con il path della directory di lavoro
+      - oppure un tk.Label con testo tipo 'Directory selezionata: ...'
+      - oppure un oggetto con .get() (es. StringVar)
+
+    Restituisce sempre il path pulito.
     """
+
+    # Caso più semplice: è già una stringa
     if isinstance(directory_source, str):
         return directory_source.strip()
 
+    # Caso: oggetto con .get() (es. StringVar)
+    if hasattr(directory_source, "get"):
+        try:
+            value = directory_source.get()
+            return str(value).strip()
+        except Exception:
+            pass
+
+    # In alternativa tentiamo di leggerne il testo (es. Label tkinter)
     try:
         text = directory_source.cget("text")
     except Exception:
+        # Fallback: rappresentazione testuale generica
         return str(directory_source).strip()
 
+    # Gestisce il prefisso usato nella vecchia interfaccia
     return text.replace("Directory selezionata:", "").strip()
+
 
 
 def _get_mix_output_directory(base_directory: str) -> str:

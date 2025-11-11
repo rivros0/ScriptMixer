@@ -9,8 +9,8 @@ from frame_live import create_frame_live
 from frame_preparazione import create_frame_preparazione
 from frame_correzione import create_frame_correzione
 from frame_export import create_frame_export
-from frame_domini import create_frame_domini  # nuova frame Domini/FTP
-from frame_associa import open_associa_window  # nuova finestra Associa
+from frame_domini import create_frame_domini  # frame Domini / FTP
+from frame_associa import open_associa_window  # finestra Associa email ↔ cartelle
 
 
 # === FINESTRA PRINCIPALE === #
@@ -27,9 +27,9 @@ if os.path.exists(icon_path):
     try:
         root.iconbitmap(icon_path)
     except Exception as e:
-        print(f"⚠️ Impossibile impostare l'icona: {e}")
+        print("⚠️ Impossibile impostare l'icona:", e)
 else:
-    print(f"⚠️ Icona non trovata: {icon_path}")
+    print("⚠️ Icona non trovata:", icon_path)
 
 # Modalità corrente (default: Preparazione)
 current_mode = tk.StringVar(value="Preparazione")
@@ -41,6 +41,12 @@ global_config = {
     "verifica_name": tk.StringVar(),
     "selected_directory": tk.StringVar(value="nessuna"),
     "current_mode": current_mode,
+    # callback opzionali per il pulsante "Aggiorna cartella"
+    "refresh_preparazione": None,
+    "refresh_live": None,
+    "refresh_correzione": None,
+    "refresh_export": None,
+    "refresh_domini": None,
 }
 
 # Riferimenti frame
@@ -48,7 +54,7 @@ frame_preparazione = None
 frame_live = None
 frame_correzione = None
 frame_export = None
-frame_domini = None  # nuova frame Domini/FTP
+frame_domini = None  # frame Domini/FTP
 
 
 # === CAMBIO MODALITÀ === #
@@ -97,10 +103,7 @@ def salva_configurazione() -> None:
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4)
-            messagebox.showinfo(
-                "Salvataggio riuscito",
-                f"Configurazione salvata in {file_path}",
-            )
+            messagebox.showinfo("Salvataggio riuscito", f"Configurazione salvata in {file_path}")
         except Exception as e:
             messagebox.showerror("Errore", f"Errore nel salvataggio: {e}")
 
@@ -137,6 +140,42 @@ def carica_configurazione() -> None:
             messagebox.showerror("Errore", f"Errore nel caricamento: {e}")
 
 
+# === FUNZIONE GLOBALE: REFRESH DIRECTORY (usata dal bottone in header) === #
+
+def refresh_current_directory() -> None:
+    """
+    Prova a richiamare un callback specifico in base alla modalità corrente
+    (ad esempio Correzione / Export), altrimenti forza un "ritrascinamento"
+    della stessa directory per riattivare le trace collegate.
+    """
+    mode = current_mode.get()
+
+    handler_key = None
+    if mode == "Preparazione":
+        handler_key = "refresh_preparazione"
+    elif mode == "Live":
+        handler_key = "refresh_live"
+    elif mode == "Correzione":
+        handler_key = "refresh_correzione"
+    elif mode == "Export":
+        handler_key = "refresh_export"
+    elif mode == "Domini":
+        handler_key = "refresh_domini"
+
+    handler = None
+    if handler_key is not None:
+        handler = global_config.get(handler_key)
+
+    if callable(handler):
+        handler()
+    else:
+        selected_var = global_config.get("selected_directory")
+        if selected_var is not None and hasattr(selected_var, "get") and hasattr(selected_var, "set"):
+            current_value = selected_var.get()
+            # Scrivere lo stesso valore su una StringVar innesca comunque la trace
+            selected_var.set(current_value)
+
+
 # === MENUBAR: File + Associa + Modalità === #
 
 menubar = tk.Menu(root)
@@ -149,11 +188,13 @@ file_menu.add_separator()
 file_menu.add_command(label="Esci", command=root.destroy)
 menubar.add_cascade(label="File", menu=file_menu)
 
-# Associa (nuova voce, apre la finestra di associazione email ↔ cartelle test)
-menubar.add_command(
-    label="Associa",
-    command=lambda: open_associa_window(root, global_config),
-)
+
+def apri_finestra_associa() -> None:
+    open_associa_window(root, global_config)
+
+
+# Voce singola "Associa"
+menubar.add_command(label="Associa", command=apri_finestra_associa)
 
 # Modalità (ordine: Preparazione, Live, Correzione, Export, Domini)
 mode_menu = tk.Menu(menubar, tearoff=0)
@@ -193,7 +234,7 @@ menubar.add_cascade(label="Modalità", menu=mode_menu)
 root.config(menu=menubar)
 
 
-# === BARRA SUPERIORE: Nome + Directory selezionata === #
+# === BARRA SUPERIORE: Nome verifica + Directory selezionata + AGGIORNA === #
 
 top_bar = tk.Frame(root, bg="#eeeeee")
 top_bar.pack(side="top", fill="x", padx=5, pady=5)
@@ -249,8 +290,15 @@ def on_directory_click(event) -> None:
         data_handler.open_selected_directory(path)
 
 
-# Correzione: si usa il click sinistro del mouse
 lbl_directory.bind("<Button-1>", on_directory_click)
+
+# Nuovo bottone "Aggiorna cartella"
+btn_refresh_dir = tk.Button(
+    top_bar,
+    text="Aggiorna cartella",
+    command=refresh_current_directory,
+)
+btn_refresh_dir.grid(row=0, column=4, padx=5, pady=2, sticky="w")
 
 top_bar.grid_columnconfigure(3, weight=1)
 
@@ -269,7 +317,6 @@ frame_domini = create_frame_domini(content_frame, global_config)
 
 # Modalità iniziale: Preparazione
 set_mode("Preparazione")
-
 
 if __name__ == "__main__":
     root.mainloop()

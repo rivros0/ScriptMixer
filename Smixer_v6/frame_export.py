@@ -280,4 +280,9 @@ def create_frame_export(root, global_config):
     # Aggiorna subito la label e l'elenco in base alla directory corrente
     update_file_list()
 
+    # Registriamo il callback di refresh per il pulsante globale in header
+    global_config["refresh_export"] = update_file_list
+
     return frame
+
+
