@@ -4,20 +4,21 @@ from tkinter import messagebox
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Preformatted,
-)
+from reportlab.platypus import SimpleDocTemplate, Preformatted
+
 from PyPDF2 import PdfReader, PdfWriter
 
 import utils  # per parse_extensions
 
 
 # =============================================================================
-#  UTILITÀ GENERALI
+# UTILITÀ GENERALI
 # =============================================================================
 
 def wrap_preserve_indent(text: str, width: int) -> str:
+    """
+    Va a capo il testo mantenendo l'indentazione iniziale di ogni riga.
+    """
     lines = text.splitlines()
     wrapped_lines = []
 
@@ -27,6 +28,7 @@ def wrap_preserve_indent(text: str, width: int) -> str:
         else:
             leading = len(line) - len(line.lstrip())
             indent = line[:leading]
+
             wrapped = textwrap.fill(
                 line,
                 width=width,
@@ -40,6 +42,12 @@ def wrap_preserve_indent(text: str, width: int) -> str:
 
 
 def _resolve_base_directory(directory_source) -> str:
+    """
+    Ritorna la directory di lavoro a partire da:
+    - una stringa
+    - oppure da una Label (usata in alcune schede)
+    - oppure da qualunque altro oggetto convertibile in stringa.
+    """
     if isinstance(directory_source, str):
         return directory_source.strip()
 
@@ -52,10 +60,28 @@ def _resolve_base_directory(directory_source) -> str:
 
 
 def _get_mix_output_directory(base_directory: str) -> str:
+    """
+    Directory usata per:
+    - contenere i file di mix *_mix.txt
+    - (in precedenza) anche i PDF.
+
+    Rimane la directory principale di lavoro per i mix.
+    """
     return os.path.join(base_directory, "00_MixOutput")
 
 
+def _get_pdf_output_directory(base_directory: str) -> str:
+    """
+    Directory dedicata ai PDF esportati (individuali + finale).
+    Tutti i PDF verranno scritti qui.
+    """
+    return os.path.join(base_directory, "00_Pdf")
+
+
 def _ensure_mix_directory_exists(output_directory: str) -> bool:
+    """
+    Verifica l'esistenza della directory 00_MixOutput per i file di mix.
+    """
     if not os.path.exists(output_directory):
         messagebox.showwarning(
             "Attenzione",
@@ -63,11 +89,12 @@ def _ensure_mix_directory_exists(output_directory: str) -> bool:
             "Esegui prima la fase di mix dei sorgenti.",
         )
         return False
+
     return True
 
 
 # =============================================================================
-#  FASE DI MIX
+# FASE DI MIX
 # =============================================================================
 
 def mix_files(
@@ -78,17 +105,30 @@ def mix_files(
     report_text,
     include_prompt: bool,
     include_subdir: bool,
-):
+) -> None:
+    """
+    Esegue il MIX dei file sorgente per ogni subdirectory elencata nella tree.
+
+    - lbl_directory: label che contiene la directory di lavoro
+    - entry_prompt: text area con l'eventuale prompt da inserire in testa
+    - entry_extension: campo estensioni (es. ".cpp" oppure ".php,.html,.css")
+    - tree: treeview con le subdirectory (test01, test02, ...)
+    - report_text: text area di log
+    - include_prompt: se True, aggiunge il prompt in testa al mix
+    - include_subdir: se True, aggiunge il nome della subdirectory nel mix
+    """
     base_directory = _resolve_base_directory(lbl_directory)
     prompt_string = entry_prompt.get("1.0", "end").strip()
     extension_string = entry_extension.get().strip()
 
     if not base_directory:
-        messagebox.showwarning("Attenzione", "Seleziona prima una directory di lavoro.")
+        messagebox.showwarning(
+            "Attenzione",
+            "Seleziona prima una directory di lavoro.",
+        )
         return
 
     exts = utils.parse_extensions(extension_string)
-
     if not exts:
         messagebox.showwarning(
             "Attenzione",
@@ -96,18 +136,17 @@ def mix_files(
         )
         return
 
-    output_directory = _get_mix_output_directory(base_directory)
-    os.makedirs(output_directory, exist_ok=True)
+    mix_output_directory = _get_mix_output_directory(base_directory)
+    os.makedirs(mix_output_directory, exist_ok=True)
 
     report_text.delete("1.0", "end")
     report_text.insert(
         "end",
         "Avvio fase di MIX.\n"
-        f"Directory base: {base_directory}\n"
-        f"Estensioni considerate: {', '.join(exts)}\n\n",
+        "Directory base: " + base_directory + "\n"
+        "Estensioni considerate: " + ", ".join(exts) + "\n\n",
     )
 
-    # per ogni riga della tree (subdirectory)
     for item in tree.get_children():
         values = list(tree.item(item, "values"))
         subdir = values[0]
@@ -117,14 +156,14 @@ def mix_files(
             subdir,
             prompt_string,
             exts,
-            output_directory,
+            mix_output_directory,
             include_prompt,
             include_subdir,
         )
+
         report_text.insert("end", msg)
         report_text.see("end")
 
-        # se abbiamo creato il mix, aggiorniamo la colonna "mix_file"
         if mix_path:
             # la colonna "mix_file" è l'ultima
             if len(values) < 6:
@@ -146,25 +185,32 @@ def create_mix_file(
     """
     Crea il file di mix per una specifica subdirectory (es. 'test01').
 
-    Restituisce: (messaggio_log, percorso_mix_file_oppure_None)
+    Restituisce:
+      (messaggio_di_log, percorso_mix_file_oppure_None)
     """
     full_path = os.path.join(base_directory, subdir)
-    mix_file_path = os.path.join(output_directory, f"{subdir}_mix.txt")
+    mix_file_path = os.path.join(output_directory, subdir + "_mix.txt")
 
     try:
         files_to_mix = []
+
         for root, _dirs, files in os.walk(full_path):
-            for file in files:
-                fname = file.lower()
-                if any(fname.endswith(ext) for ext in extensions):
-                    files_to_mix.append(os.path.join(root, file))
+            for file_name in files:
+                lower_name = file_name.lower()
+                for ext in extensions:
+                    if lower_name.endswith(ext):
+                        files_to_mix.append(os.path.join(root, file_name))
+                        break
 
         if not files_to_mix:
-            return (
-                f"Nessun file con estensioni {', '.join(extensions)} trovato nella "
-                f"subdirectory {subdir}. File di mix NON creato.\n",
-                None,
+            message = (
+                "Nessun file con estensioni "
+                + ", ".join(extensions)
+                + " trovato nella subdirectory "
+                + subdir
+                + ".\nFile di mix NON creato.\n"
             )
+            return message, None
 
         with open(mix_file_path, "w", encoding="utf-8") as mix_file:
             if include_prompt and prompt_string:
@@ -189,34 +235,55 @@ def create_mix_file(
                 mix_file.write(
                     "###############################################################\n\n"
                 )
-                mix_file.write(f"{os.path.basename(file_path)}\n{content}\n")
+                mix_file.write(os.path.basename(file_path) + "\n" + content + "\n")
 
-        return (
-            f"Mix completato per {subdir}: file con estensioni "
-            f"{', '.join(extensions)} uniti con successo in "
-            f"{os.path.basename(mix_file_path)}.\n",
-            mix_file_path,
+        message = (
+            "Mix completato per "
+            + subdir
+            + ": file con estensioni "
+            + ", ".join(extensions)
+            + " uniti con successo in "
+            + os.path.basename(mix_file_path)
+            + ".\n"
         )
+        return message, mix_file_path
 
-    except Exception as e:
-        return f"Errore durante il mix per {subdir}: {str(e)}\n", None
+    except Exception as exc:
+        return "Errore durante il mix per " + subdir + ": " + str(exc) + "\n", None
 
 
 # =============================================================================
-#  FASE DI EXPORT (PDF) - invariata
+# FASE DI EXPORT (PDF)
 # =============================================================================
 
-def create_individual_pdfs(directory_source, report_text):
+def create_individual_pdfs(directory_source, report_text) -> None:
+    """
+    Crea un PDF individuale per ogni file *_mix.txt presente in 00_MixOutput.
+
+    I PDF vengono salvati nella cartella 00_Pdf sotto la directory di lavoro.
+    """
     base_directory = _resolve_base_directory(directory_source)
+
     if not base_directory:
-        messagebox.showwarning("Attenzione", "Seleziona prima una directory di lavoro.")
+        messagebox.showwarning(
+            "Attenzione",
+            "Seleziona prima una directory di lavoro.",
+        )
         return
 
-    output_directory = _get_mix_output_directory(base_directory)
-    if not _ensure_mix_directory_exists(output_directory):
+    mix_output_directory = _get_mix_output_directory(base_directory)
+    if not _ensure_mix_directory_exists(mix_output_directory):
         return
 
-    report_text.insert("end", f"Creazione PDF multipli dalla directory: {output_directory}\n")
+    pdf_output_directory = _get_pdf_output_directory(base_directory)
+    os.makedirs(pdf_output_directory, exist_ok=True)
+
+    report_text.insert(
+        "end",
+        "Creazione PDF multipli.\n"
+        "Directory dei file di mix: " + mix_output_directory + "\n"
+        "Directory di output PDF: " + pdf_output_directory + "\n",
+    )
 
     styles = getSampleStyleSheet()
     monospace_style = ParagraphStyle(
@@ -230,39 +297,50 @@ def create_individual_pdfs(directory_source, report_text):
     max_char_width = 75
     created_count = 0
 
-    for file_name in sorted(os.listdir(output_directory)):
+    for file_name in sorted(os.listdir(mix_output_directory)):
         if not file_name.endswith("_mix.txt"):
             continue
 
-        txt_path = os.path.join(output_directory, file_name)
+        txt_path = os.path.join(mix_output_directory, file_name)
         base_name = os.path.splitext(file_name)[0]
-        pdf_path = os.path.join(output_directory, f"{base_name}.pdf")
+        pdf_path = os.path.join(pdf_output_directory, base_name + ".pdf")
 
         try:
-            with open(txt_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            with open(txt_path, "r", encoding="latin-1", errors="replace") as f:
-                content = f.read()
+            try:
+                with open(txt_path, "r", encoding="utf-8") as file_handle:
+                    content = file_handle.read()
+            except UnicodeDecodeError:
+                with open(
+                    txt_path,
+                    "r",
+                    encoding="latin-1",
+                    errors="replace",
+                ) as file_handle:
+                    content = file_handle.read()
 
-        wrapped_content = wrap_preserve_indent(content, max_char_width)
-        lines = [line for line in wrapped_content.splitlines()]
-        cleaned_content = "\n".join(lines)
+            wrapped_content = wrap_preserve_indent(content, max_char_width)
+            lines = wrapped_content.splitlines()
+            cleaned_content = "\n".join(lines)
 
-        story = [Preformatted(cleaned_content, monospace_style)]
+            story = [Preformatted(cleaned_content, monospace_style)]
 
-        try:
             doc = SimpleDocTemplate(pdf_path, pagesize=A4)
             doc.build(story)
-            created_count += 1
+
+            created_count = created_count + 1
             report_text.insert(
                 "end",
-                f"Creato PDF: {os.path.basename(pdf_path)}\n",
+                "Creato PDF: " + os.path.basename(pdf_path) + "\n",
             )
-        except Exception as e:
+
+        except Exception as exc:
             report_text.insert(
                 "end",
-                f"Errore durante la creazione del PDF {pdf_path}: {e}\n",
+                "Errore durante la creazione del PDF "
+                + pdf_path
+                + ": "
+                + str(exc)
+                + "\n",
             )
 
     if created_count == 0:
@@ -273,62 +351,86 @@ def create_individual_pdfs(directory_source, report_text):
     else:
         report_text.insert(
             "end",
-            f"Creazione PDF multipli completata.\nTotale PDF creati: {created_count}\n",
+            "Creazione PDF multipli completata.\n"
+            "Totale PDF creati: "
+            + str(created_count)
+            + "\n",
         )
 
     report_text.see("end")
 
 
-def merge_all_files(directory_source, report_text):
+def merge_all_files(directory_source, report_text) -> None:
+    """
+    Crea il PDF unico finale, pronto per PdfMegaMerge / stampa fronte-retro.
+
+    - Se non trova PDF individuali in 00_Pdf, lancia prima create_individual_pdfs().
+    - Legge tutti i PDF da 00_Pdf (eccetto il finale stesso).
+    - Per ogni elaborato garantisce un numero PARI di pagine
+      (se dispari, aggiunge una pagina bianca).
+    - Salva il PDF finale in 00_Pdf come 00_MEGAmerged_output_final.pdf.
+    """
     base_directory = _resolve_base_directory(directory_source)
+
     if not base_directory:
-        messagebox.showwarning("Attenzione", "Seleziona prima una directory di lavoro.")
+        messagebox.showwarning(
+            "Attenzione",
+            "Seleziona prima una directory di lavoro.",
+        )
         return
 
-    output_directory = _get_mix_output_directory(base_directory)
-    if not _ensure_mix_directory_exists(output_directory):
+    mix_output_directory = _get_mix_output_directory(base_directory)
+    if not _ensure_mix_directory_exists(mix_output_directory):
         return
 
-    final_pdf_path = os.path.join(output_directory, "00_MEGAmerged_output_final.pdf")
+    pdf_output_directory = _get_pdf_output_directory(base_directory)
+    os.makedirs(pdf_output_directory, exist_ok=True)
 
-    pdf_files = sorted(
-        [
-            os.path.join(output_directory, f)
-            for f in os.listdir(output_directory)
-            if f.endswith(".pdf")
-            and not f.startswith("00_MEGAmerged_output_final")
-        ]
+    final_pdf_path = os.path.join(
+        pdf_output_directory,
+        "00_MEGAmerged_output_final.pdf",
     )
+
+    pdf_files = []
+
+    for file_name in sorted(os.listdir(pdf_output_directory)):
+        if not file_name.lower().endswith(".pdf"):
+            continue
+        if file_name.startswith("00_MEGAmerged_output_final"):
+            continue
+
+        pdf_files.append(os.path.join(pdf_output_directory, file_name))
 
     if not pdf_files:
         report_text.insert(
             "end",
-            "Nessun PDF individuale trovato in 00_MixOutput.\n"
+            "Nessun PDF individuale trovato in 00_Pdf.\n"
             "Avvio automatico di 'Crea PDF multipli'...\n",
         )
         report_text.see("end")
 
         create_individual_pdfs(base_directory, report_text)
 
-        pdf_files = sorted(
-            [
-                os.path.join(output_directory, f)
-                for f in os.listdir(output_directory)
-                if f.endswith(".pdf")
-                and not f.startswith("00_MEGAmerged_output_final")
-            ]
-        )
+        pdf_files = []
+        for file_name in sorted(os.listdir(pdf_output_directory)):
+            if not file_name.lower().endswith(".pdf"):
+                continue
+            if file_name.startswith("00_MEGAmerged_output_final"):
+                continue
+
+            pdf_files.append(os.path.join(pdf_output_directory, file_name))
 
         if not pdf_files:
             report_text.insert(
                 "end",
-                "Impossibile procedere con il MEGAmerge: nessun PDF da unire.\n",
+                "Impossibile procedere con il MEGAmerge: nessun PDF da unire in 00_Pdf.\n",
             )
             report_text.see("end")
             return
 
     try:
         writer = PdfWriter()
+
         report_text.insert(
             "end",
             "Inizio creazione del PDF finale con pagine pari per ogni elaborato...\n",
@@ -346,29 +448,43 @@ def merge_all_files(directory_source, report_text):
                 width = first_page.mediabox.width
                 height = first_page.mediabox.height
                 writer.add_blank_page(width=width, height=height)
+
                 report_text.insert(
                     "end",
-                    f"{os.path.basename(pdf_path)}: {num_pages} pagine -> "
-                    f"aggiunta 1 pagina bianca (totale nel blocco: {num_pages + 1}).\n",
+                    os.path.basename(pdf_path)
+                    + ": "
+                    + str(num_pages)
+                    + " pagine -> aggiunta 1 pagina bianca "
+                    + "(totale nel blocco: "
+                    + str(num_pages + 1)
+                    + ").\n",
                 )
             else:
                 report_text.insert(
                     "end",
-                    f"{os.path.basename(pdf_path)}: {num_pages} pagine (già pari).\n",
+                    os.path.basename(pdf_path)
+                    + ": "
+                    + str(num_pages)
+                    + " pagine (già pari).\n",
                 )
 
-        with open(final_pdf_path, "wb") as out_f:
-            writer.write(out_f)
+        with open(final_pdf_path, "wb") as out_file:
+            writer.write(out_file)
 
         report_text.insert(
             "end",
-            f"MEGAmerge completato.\nFile PDF finale creato: {final_pdf_path}\n",
+            "MEGAmerge completato.\n"
+            "File PDF finale creato in 00_Pdf:\n"
+            + final_pdf_path
+            + "\n",
         )
         report_text.see("end")
 
-    except Exception as e:
+    except Exception as exc:
         report_text.insert(
             "end",
-            f"Errore durante il merge dei PDF in un unico file: {e}\n",
+            "Errore durante il merge dei PDF in un unico file: "
+            + str(exc)
+            + "\n",
         )
         report_text.see("end")

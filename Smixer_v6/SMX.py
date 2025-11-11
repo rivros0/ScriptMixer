@@ -16,7 +16,7 @@ from frame_associa import open_associa_window  # nuova finestra Associa
 # === FINESTRA PRINCIPALE === #
 
 root = tk.Tk()
-root.title("SMX V0.811 / Gestione Elaborati ")
+root.title("SMX V0.82 / Gestione Elaborati ")
 root.geometry("1280x800")
 
 # Percorso all'icona (funziona anche dentro l'exe)
