@@ -6,77 +6,193 @@ import threading
 import queue
 from ftplib import FTP
 from datetime import datetime
+import re
 
-# Nuovo modulo dedicato all'analisi dei contenuti FTP e confronto con verifiche
+# Modulo dedicato all’analisi verifiche/domìni (non alteriamo similarity.py)
 import similarity_ftp
 
 YELLOW_BG = "#85187c"
 
 
+# ======================================================================
+# FUNZIONI DI SUPPORTO
+# ======================================================================
+
 def format_bytes(num_bytes):
     """
-    Converte un numero di byte in una stringa leggibile (B, KB, MB, GB, ...).
+    Converte byte in stringa leggibile (B, KB, MB, GB, TB).
     """
     unita = ["B", "KB", "MB", "GB", "TB"]
     valore = float(num_bytes)
     indice = 0
-
     while valore >= 1024.0 and indice < len(unita) - 1:
         valore = valore / 1024.0
         indice = indice + 1
-
     if indice == 0:
         return str(int(valore)) + " " + unita[indice]
-
     return "{:.1f} {}".format(valore, unita[indice])
 
 
 def get_versioned_path(percorso_base):
     """
-    Restituisce un percorso libero applicando un versionamento incrementale.
-    Se il file non esiste usa il nome originale.
-    Se esiste:
-        nome.ext -> nome_v01.ext, poi nome_v02.ext, ecc.
+    Applica versionamento incrementale se il file esiste già.
+    es: file.ext -> file_v01.ext -> file_v02.ext
     """
     if not os.path.exists(percorso_base):
         return percorso_base
-
     base, ext = os.path.splitext(percorso_base)
     contatore = 1
-
     while True:
-        nuovo_percorso = "{}_v{:02d}{}".format(base, contatore, ext)
-        if not os.path.exists(nuovo_percorso):
-            return nuovo_percorso
+        candidato = "{}_v{:02d}{}".format(base, contatore, ext)
+        if not os.path.exists(candidato):
+            return candidato
         contatore = contatore + 1
 
 
+def _sanitize_alunno_tag(raw):
+    """
+    Ripulisce il valore 'alunno' dal CSV:
+    - minuscolo
+    - se è una email usa la parte prima di '@'
+    - rimuove spazi
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip().lower()
+    if "@" in s:
+        s = s.split("@", 1)[0]
+    s = s.replace(" ", "")
+    return s
+
+
+def _derive_candidate_tags(raw):
+    """
+    Da 'nome.cognome', 'cognome.nome', 'cognome' o email -> lista di tag candidati.
+    Ordine: base, scambi, singoli.
+    """
+    base = _sanitize_alunno_tag(raw)
+    candidates = []
+    if base != "":
+        candidates.append(base)
+
+    parts = re.split(r"[._]+", base)
+    if len(parts) >= 2:
+        p1 = parts[0]
+        p2 = parts[1]
+        if p1 and p2:
+            candidates.append(p2 + "." + p1)
+            candidates.append(p1 + "." + p2)
+            candidates.append(p1)
+            candidates.append(p2)
+    elif len(parts) == 1 and parts[0] != "":
+        candidates.append(parts[0])
+
+    # Dedup preservando l’ordine
+    visti = set()
+    ordinati = []
+    i = 0
+    while i < len(candidates):
+        c = candidates[i]
+        if c and c not in visti:
+            ordinati.append(c)
+            visti.add(c)
+        i = i + 1
+    return ordinati
+
+
+def _list_test_dirs(base_dir):
+    """
+    Elenca le directory di primo livello nella cartella selezionata.
+    Non impone schema: restituisce tutte le cartelle (ci penserà il matcher).
+    """
+    out = []
+    if not os.path.isdir(base_dir):
+        return out
+    for name in os.listdir(base_dir):
+        p = os.path.join(base_dir, name)
+        if os.path.isdir(p):
+            out.append(name)
+    return out
+
+
+def _match_test_dir(test_dirs, alunno_raw):
+    """
+    Trova la cartella test associata all’alunno.
+    Schemi supportati (case-insensitive):
+      1) <tag>__testNN            (NUOVO FORMATO)
+      2) testNN-<tag>  / testNN_<tag>   (STORICI)
+      3) fallback permissivo: contiene "test" e il tag
+    Dove <tag> è uno dei candidati derivati da _derive_candidate_tags().
+    """
+    if not test_dirs:
+        return ""
+
+    # mappa lower -> originale
+    td_low_map = {}
+    i = 0
+    while i < len(test_dirs):
+        d = test_dirs[i]
+        td_low_map[d.lower()] = d
+        i = i + 1
+
+    candidates = _derive_candidate_tags(alunno_raw)
+
+    # 1) <tag>__test
+    i = 0
+    while i < len(candidates):
+        tag = candidates[i]
+        prefix = tag + "__test"
+        for low_name, original in td_low_map.items():
+            if low_name.startswith(prefix):
+                return original
+        i = i + 1
+
+    # 2) testNN-<tag>  oppure testNN_<tag>
+    i = 0
+    while i < len(candidates):
+        tag = candidates[i]
+        pattern_dash = "-" + tag
+        pattern_underscore = "_" + tag
+        for low_name, original in td_low_map.items():
+            if low_name.startswith("test") and (low_name.endswith(pattern_dash) or low_name.endswith(pattern_underscore)):
+                return original
+        i = i + 1
+
+    # 3) fallback: contiene "test" e il tag
+    i = 0
+    while i < len(candidates):
+        tag = candidates[i]
+        for low_name, original in td_low_map.items():
+            if "test" in low_name and tag in low_name:
+                return original
+        i = i + 1
+
+    return ""
+
+
+# ======================================================================
+# FRAME PRINCIPALE
+# ======================================================================
+
 def create_frame_domini(root, global_config):
     """
-    Frame per la gestione dei domini Altervista:
-    - Creazione modello CSV
-    - Caricamento CSV (cognome, dominio, ftp_user, ftp_password)
-    - Associazione cognome -> cartella testXX-cognome
-    - Download FTP (in parallelo) con versionamento dei file
-    - Tabella riepilogativa:
-        Nome alunno, dominio, stato, avanzamento, numero file,
-        elenco file, peso complessivo cartella, ultima modifica
-    - Label in alto a destra con peso complessivo di 00_DominiFTP
-    - Analisi delle somiglianze e mappa delle similitudini (via similarity_ftp)
+    Gestione Domini Altervista:
+      - Crea modello CSV
+      - Carica CSV (cognome, dominio, ftp_user, ftp_password)
+      - Associa alunno → cartella test (nuovo schema + fallback)
+      - Download FTP in parallelo con versionamento e log
+      - Tabella stato per ogni alunno
+      - Peso complessivo directory 00_DominiFTP
+      - Analisi somiglianze + mappa (via similarity_ftp)
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
-    # ==================================================================
-    # CODA PER AGGIORNAMENTI GUI (usata dai thread worker)
-    # ==================================================================
     update_queue = queue.Queue()
-
-    # Risultati analisi similarità (riempiti da "Analizza somiglianze")
     similarity_results = {}
 
-    # ==================================================================
-    # RIGA 0: PULSANTI COMANDI + LABEL PESO TOTALE FTP
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # RIGA 0: pulsanti + peso totale
+    # ------------------------------------------------------------------
     btn_modello = tk.Button(frame, text="Crea modello CSV", width=18)
     btn_modello.grid(row=0, column=0, padx=6, pady=6, sticky="w")
 
@@ -92,17 +208,12 @@ def create_frame_domini(root, global_config):
     btn_mappa = tk.Button(frame, text="Mostra mappa similitudini", width=24, state="disabled")
     btn_mappa.grid(row=0, column=4, padx=6, pady=6, sticky="w")
 
-    lbl_peso_totale = tk.Label(
-        frame,
-        text="Totale FTP: 0 B",
-        bg=YELLOW_BG,
-        anchor="e",
-    )
+    lbl_peso_totale = tk.Label(frame, text="Totale FTP: 0 B", bg=YELLOW_BG, anchor="e")
     lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")
 
-    # ==================================================================
-    # RIGA 1: TABELLA PRINCIPALE
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # RIGA 1: tabella
+    # ------------------------------------------------------------------
     colonne = (
         "Alunno",
         "Dominio",
@@ -116,59 +227,49 @@ def create_frame_domini(root, global_config):
 
     tree = ttk.Treeview(frame, columns=colonne, show="headings", height=18)
 
-    for col in colonne:
+    i = 0
+    while i < len(colonne):
+        col = colonne[i]
         tree.heading(col, text=col)
-
         if col == "Alunno":
-            tree.column(col, width=120, anchor="center")
+            tree.column(col, width=140, anchor="center")
         elif col == "Dominio":
-            tree.column(col, width=180, anchor="center")
+            tree.column(col, width=200, anchor="center")
         elif col == "Stato":
-            tree.column(col, width=220, anchor="w")
-        elif col == "Elenco file":
             tree.column(col, width=260, anchor="w")
+        elif col == "Elenco file":
+            tree.column(col, width=320, anchor="w")
         else:
             tree.column(col, width=120, anchor="center")
+        i = i + 1
 
     tree.grid(row=1, column=0, columnspan=6, padx=10, pady=10, sticky="nsew")
-
     scrollbar_vert = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scrollbar_vert.set)
     scrollbar_vert.grid(row=1, column=6, sticky="ns")
 
-    # ==================================================================
-    # RIGHE 2-3: AREA LOG
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # RIGHE 2-3: log
+    # ------------------------------------------------------------------
     tk.Label(frame, text="Log eventi:", bg=YELLOW_BG).grid(row=2, column=0, sticky="w", padx=6, pady=6)
 
     txt_log = tk.Text(frame, height=8, width=120)
     txt_log.grid(row=3, column=0, columnspan=7, padx=10, pady=5, sticky="ew")
 
-    def log(messaggio):
-        """
-        Scrive un messaggio nel riquadro log.
-        Da usare solo nel thread principale o tramite update_queue.
-        """
-        txt_log.insert("end", messaggio + "\n")
+    def log(msg):
+        txt_log.insert("end", msg + "\n")
         txt_log.see("end")
 
-    # ==================================================================
-    # STRUTTURE DATI IN MEMORIA
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Stato in memoria
+    # ------------------------------------------------------------------
     credenziali_by_item = {}   # item_id -> (ftp_user, ftp_pass)
     testdir_by_item = {}       # item_id -> cartella test associata
 
-    # ==================================================================
-    # FUNZIONE: CREA MODELLO CSV
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Crea modello CSV
+    # ------------------------------------------------------------------
     def crea_modello_csv():
-        """
-        Crea un file CSV con intestazioni:
-            cognome, dominio, ftp_user, ftp_password
-
-        Se la directory selezionata contiene cartelle testXX-cognome,
-        estrae automaticamente i cognomi.
-        """
         base_dir = global_config["selected_directory"].get().strip()
         if os.path.isdir(base_dir):
             initial_dir = base_dir
@@ -181,62 +282,55 @@ def create_frame_domini(root, global_config):
             initialdir=initial_dir,
             filetypes=[("File CSV", "*.csv"), ("Tutti i file", "*.*")],
         )
-
         if not percorso_csv:
             return
 
         cognomi = []
-
         if os.path.isdir(base_dir):
             elementi = os.listdir(base_dir)
-            for nome_dir in elementi:
+            j = 0
+            while j < len(elementi):
+                nome_dir = elementi[j]
                 percorso_dir = os.path.join(base_dir, nome_dir)
-                if os.path.isdir(percorso_dir) and nome_dir.lower().startswith("test"):
-                    parti = nome_dir.split("-", 1)
-                    if len(parti) == 2:
-                        cognome = parti[1].strip().lower()
-                        if cognome:
-                            cognomi.append(cognome)
+                if os.path.isdir(percorso_dir) and "test" in nome_dir.lower():
+                    # tenta di estrarre parte dopo "-" o "_"
+                    if "-" in nome_dir:
+                        parti = nome_dir.split("-", 1)
+                        if len(parti) == 2:
+                            cogn = parti[1].strip().lower()
+                            if cogn:
+                                cognomi.append(cogn)
+                    elif "_" in nome_dir:
+                        parti = nome_dir.split("_", 1)
+                        if len(parti) == 2:
+                            cogn = parti[1].strip().lower()
+                            if cogn:
+                                cognomi.append(cogn)
+                j = j + 1
 
         try:
             with open(percorso_csv, "w", newline="", encoding="utf-8") as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(["cognome", "dominio", "ftp_user", "ftp_password"])
-
-                insieme_cognomi = sorted(set(cognomi))
-                for cognome in insieme_cognomi:
-                    writer.writerow([cognome, "", "", ""])
-
+                inseriti = sorted(set(cognomi))
+                k = 0
+                while k < len(inseriti):
+                    writer.writerow([inseriti[k], "", "", ""])
+                    k = k + 1
             log("Modello CSV creato in: " + percorso_csv)
-            if cognomi:
-                log(
-                    "Inseriti automaticamente {} cognomi dalle cartelle test.".format(
-                        len(set(cognomi))
-                    )
-                )
+            if len(cognomi) > 0:
+                log("Inseriti automaticamente {} nominativi candidate dai nomi cartella.".format(len(set(cognomi))))
             else:
-                log("Nessuna cartella test trovata: modello creato solo con intestazioni.")
+                log("Nessuna cartella utile trovata: modello creato con sole intestazioni.")
         except Exception as e:
             messagebox.showerror("Errore", "Errore nella creazione del modello CSV:\n" + str(e))
 
     btn_modello.configure(command=crea_modello_csv)
 
-    # ==================================================================
-    # FUNZIONE: CARICA CSV
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Carica CSV
+    # ------------------------------------------------------------------
     def carica_csv():
-        """
-        Carica un CSV con colonne:
-            cognome, dominio, ftp_user, ftp_password
-
-        Popola la tabella con:
-            Alunno, Dominio, Stato iniziale (Test OK / Test non trovato),
-            Avanzamento=0%, N. file=0, Elenco file vuoto,
-            Peso=0 B, Ultima modifica vuota.
-
-        Le password NON vengono mostrate, ma vengono salvate in memoria
-        in 'credenziali_by_item'.
-        """
         for item in tree.get_children():
             tree.delete(item)
         credenziali_by_item.clear()
@@ -248,27 +342,18 @@ def create_frame_domini(root, global_config):
 
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona prima la directory principale delle prove (cartelle testXX).",
-            )
+            messagebox.showwarning("Attenzione", "Seleziona prima la directory principale delle prove.")
             return
 
         percorso_csv = filedialog.askopenfilename(
             title="Seleziona file CSV con domini",
             filetypes=[("File CSV", "*.csv"), ("Tutti i file", "*.*")],
         )
-
         if not percorso_csv:
             return
 
-        test_dirs = []
-        for nome_dir in os.listdir(base_dir):
-            percorso_dir = os.path.join(base_dir, nome_dir)
-            if os.path.isdir(percorso_dir) and nome_dir.lower().startswith("test"):
-                test_dirs.append(nome_dir)
-
-        log("Trovate {} cartelle test nella directory selezionata.".format(len(test_dirs)))
+        test_dirs = _list_test_dirs(base_dir)
+        log("Trovate {} cartelle (candidate test) nella directory selezionata.".format(len(test_dirs)))
 
         try:
             with open(percorso_csv, newline="", encoding="utf-8") as csvfile:
@@ -284,51 +369,26 @@ def create_frame_domini(root, global_config):
 
         righe_inserite = 0
 
-        for row in righe:
+        i = 0
+        while i < len(righe):
+            row = righe[i]
             cognome = row.get("cognome", "").strip().lower()
             dominio = row.get("dominio", "").strip()
             ftp_user = row.get("ftp_user", "").strip()
             ftp_pass = row.get("ftp_password", "").strip()
 
-            if not cognome and not dominio:
+            if cognome == "" and dominio == "":
+                i = i + 1
                 continue
 
-            # Associazione cartella test:
-            # 1) preferenza: <nome_utente>__testNN   (es. 'nome.cognome__test05')
-            #    dove <nome_utente> = valore CSV nel campo 'cognome' (qui usato come "alunno tag")
-            # 2) fallback:   testNN-<cognome>
-            found_test = ""
-            stato_iniziale = "Test non trovato"
-
-            # normalizziamo il "tag alunno" in minuscolo (come i nomi cartella)
-            alunno_tag = cognome
-
-            # 1) match preferito: "<alunno_tag>__test"
-            idx_dir = 0
-            while idx_dir < len(test_dirs):
-                td = test_dirs[idx_dir]
-                td_low = td.lower()
-                if td_low.startswith(alunno_tag + "__test"):
-                    found_test = td
-                    stato_iniziale = "Test OK"
-                    break
-                idx_dir = idx_dir + 1
-
-            # 2) fallback storico: "testNN-<cognome>"
-            if found_test == "":
-                idx_dir = 0
-                while idx_dir < len(test_dirs):
-                    td = test_dirs[idx_dir]
-                    td_low = td.lower()
-                    if td_low.startswith("test") and td_low.endswith(alunno_tag):
-                        found_test = td
-                        stato_iniziale = "Test OK"
-                        break
-                    idx_dir = idx_dir + 1
-
+            found_test = _match_test_dir(test_dirs, cognome)
+            if found_test != "":
+                stato_iniziale = "Test OK"
+            else:
+                stato_iniziale = "Test non trovato"
 
             valori = (
-                cognome,        # Alunno
+                cognome,        # Alunno (tag)
                 dominio,        # Dominio
                 stato_iniziale, # Stato
                 "0%",           # Avanzamento
@@ -342,72 +402,54 @@ def create_frame_domini(root, global_config):
             credenziali_by_item[item_id] = (ftp_user, ftp_pass)
             testdir_by_item[item_id] = found_test
             righe_inserite = righe_inserite + 1
+            i = i + 1
 
-        log(
-            "File CSV '{}' caricato correttamente. Righe valide: {}".format(
-                os.path.basename(percorso_csv),
-                righe_inserite,
-            )
-        )
+        log("File CSV '{}' caricato. Righe valide: {}".format(os.path.basename(percorso_csv), righe_inserite))
 
         if righe_inserite > 0:
             btn_scarica.configure(state="normal")
-            log(
-                "Bottone download FTP abilitato ({} domini caricati).".format(
-                    righe_inserite
-                )
-            )
+            log("Bottone download FTP abilitato ({} domini caricati).".format(righe_inserite))
         else:
             btn_scarica.configure(state="disabled")
             messagebox.showwarning("Attenzione", "Nessuna riga valida trovata nel CSV.")
 
     btn_carica.configure(command=carica_csv)
 
-    # ==================================================================
-    # FUNZIONE: RICALCOLO PESO TOTALE DIRECTORY 00_DominiFTP
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Peso totale 00_DominiFTP
+    # ------------------------------------------------------------------
     def aggiorna_peso_totale_ftp():
-        """
-        Calcola il peso complessivo della directory 00_DominiFTP
-        e aggiorna la label in alto a destra.
-        """
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
             lbl_peso_totale.config(text="Totale FTP: 0 B")
             return
-
         dir_ftp = os.path.join(base_dir, "00_DominiFTP")
         if not os.path.isdir(dir_ftp):
             lbl_peso_totale.config(text="Totale FTP: 0 B")
             return
-
         totale = 0
         for radice, _, files in os.walk(dir_ftp):
-            for nome_file in files:
-                percorso_file = os.path.join(radice, nome_file)
+            j = 0
+            while j < len(files):
+                percorso_file = os.path.join(radice, files[j])
                 try:
                     totale = totale + os.path.getsize(percorso_file)
                 except Exception:
                     pass
-
+                j = j + 1
         lbl_peso_totale.config(text="Totale FTP: " + format_bytes(totale))
 
-    # ==================================================================
-    # FUNZIONE: PROCESSO CENTRALE CHE LEGGE LA CODA E AGGIORNA LA GUI
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Loop di servizio per aggiornare la GUI da thread
+    # ------------------------------------------------------------------
     def process_update_queue():
-        """
-        Legge gli aggiornamenti dalla coda e li applica alla GUI.
-        Viene richiamata periodicamente tramite after().
-        """
         try:
             while True:
                 task = update_queue.get_nowait()
                 tipo = task[0]
 
                 if tipo == "log":
-                    messaggio = task[1]
-                    log(messaggio)
+                    log(task[1])
 
                 elif tipo == "set":
                     item_id = task[1]
@@ -425,31 +467,20 @@ def create_frame_domini(root, global_config):
                     btn_analizza.configure(state="normal")
         except queue.Empty:
             pass
-
         frame.after(100, process_update_queue)
 
-    # ==================================================================
-    # FUNZIONE: DOWNLOAD FTP DI TUTTI I DOMINI (IN PARALLELO)
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Download FTP (parallelo)
+    # ------------------------------------------------------------------
     def scarica_tutti():
-        """
-        Avvia in parallelo i download FTP per tutte le righe della tabella.
-        Aggiornamenti GUI veicolati tramite coda (thread-safe).
-        """
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona prima la directory principale delle prove (cartelle testXX).",
-            )
+            messagebox.showwarning("Attenzione", "Seleziona prima la directory principale delle prove.")
             return
 
         items = tree.get_children()
         if not items:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessun dominio da scaricare. Carica prima il CSV.",
-            )
+            messagebox.showwarning("Attenzione", "Nessun dominio da scaricare. Carica prima il CSV.")
             return
 
         dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
@@ -462,29 +493,27 @@ def create_frame_domini(root, global_config):
         btn_mappa.configure(state="disabled")
         similarity_results.clear()
 
-        # Preparazione job
         jobs = []
-        for item_id in items:
-            valori_correnti = list(tree.item(item_id, "values"))
-            alunno = valori_correnti[0]
-            dominio = valori_correnti[1]
-            stato_base = valori_correnti[2]
+        i = 0
+        while i < len(items):
+            item_id = items[i]
+            valori_corr = list(tree.item(item_id, "values"))
+            alunno = valori_corr[0]
+            dominio = valori_corr[1]
+            stato_base = valori_corr[2]
             ftp_user, ftp_pass = credenziali_by_item.get(item_id, ("", ""))
 
-            job = {
+            jobs.append({
                 "item_id": item_id,
                 "alunno": alunno,
                 "dominio": dominio,
                 "stato_base": stato_base,
                 "ftp_user": ftp_user,
                 "ftp_pass": ftp_pass,
-            }
-            jobs.append(job)
+            })
+            i = i + 1
 
         def worker_job(job):
-            """
-            Thread worker per un singolo dominio: connessione FTP, download, aggiornamenti GUI.
-            """
             item_id = job["item_id"]
             alunno = job["alunno"]
             dominio = job["dominio"]
@@ -496,7 +525,7 @@ def create_frame_domini(root, global_config):
             if host and not host.startswith("ftp."):
                 host = "ftp." + host
 
-            # reset campi di avanzamento
+            # reset campi
             update_queue.put(("set", item_id, "Stato", stato_base + " / Connessione FTP..."))
             update_queue.put(("set", item_id, "Avanzamento", "0%"))
             update_queue.put(("set", item_id, "N. file", "0"))
@@ -526,9 +555,9 @@ def create_frame_domini(root, global_config):
                 update_queue.put(("log", "❌ Errore di connessione/login {} per '{}': {}".format(host, alunno, e)))
                 return
 
+            # cartella locale alunno
             nome_cartella_alunno = alunno if alunno else "sconosciuto"
-            dir_ftp_base_local = os.path.join(base_dir, "00_DominiFTP")
-            dir_locale_alunno = os.path.join(dir_ftp_base_local, nome_cartella_alunno)
+            dir_locale_alunno = os.path.join(dir_ftp_base, nome_cartella_alunno)
             if not os.path.isdir(dir_locale_alunno):
                 try:
                     os.makedirs(dir_locale_alunno, exist_ok=True)
@@ -540,7 +569,6 @@ def create_frame_domini(root, global_config):
 
             def collect_files(percorso_remoto):
                 nonlocal ultima_modifica
-
                 try:
                     entries = list(ftp.mlsd(percorso_remoto))
                 except Exception:
@@ -549,25 +577,29 @@ def create_frame_domini(root, global_config):
                         nomi = ftp.nlst()
                     except Exception:
                         return
-                    for nome in nomi:
+                    j = 0
+                    while j < len(nomi):
+                        nome = nomi[j]
                         if nome not in (".", ".."):
                             if percorso_remoto in (".", ""):
                                 remoto = nome
                             else:
                                 remoto = percorso_remoto + "/" + nome
                             lista_file_remoti.append(remoto)
+                        j = j + 1
                     return
 
-                for nome, facts in entries:
+                k = 0
+                while k < len(entries):
+                    nome, facts = entries[k]
                     if nome in (".", ".."):
+                        k = k + 1
                         continue
-
                     tipo = facts.get("type", "")
                     if percorso_remoto in (".", ""):
                         remoto = nome
                     else:
                         remoto = percorso_remoto + "/" + nome
-
                     if tipo == "dir":
                         collect_files(remoto)
                     else:
@@ -580,6 +612,7 @@ def create_frame_domini(root, global_config):
                                     ultima_modifica = data
                             except Exception:
                                 pass
+                    k = k + 1
 
             collect_files(".")
 
@@ -597,17 +630,22 @@ def create_frame_domini(root, global_config):
             peso_totale_alunno = 0
             elenco_file_preview = []
 
-            for remoto in lista_file_remoti:
+            m = 0
+            while m < len(lista_file_remoti):
+                remoto = lista_file_remoti[m]
                 parti = remoto.split("/")
                 cartella_locale_corrente = dir_locale_alunno
 
-                for nome_dir in parti[:-1]:
+                n = 0
+                while n < len(parti) - 1:
+                    nome_dir = parti[n]
                     cartella_locale_corrente = os.path.join(cartella_locale_corrente, nome_dir)
                     if not os.path.isdir(cartella_locale_corrente):
                         try:
                             os.makedirs(cartella_locale_corrente, exist_ok=True)
                         except Exception:
                             pass
+                    n = n + 1
 
                 nome_file = parti[-1]
                 percorso_locale_base = os.path.join(cartella_locale_corrente, nome_file)
@@ -617,6 +655,7 @@ def create_frame_domini(root, global_config):
                     with open(percorso_locale, "wb") as f_locale:
                         ftp.retrbinary("RETR " + remoto, f_locale.write)
                 except Exception:
+                    m = m + 1
                     continue
 
                 try:
@@ -635,14 +674,13 @@ def create_frame_domini(root, global_config):
                 percentuale = int(round((conteggio_file * 100.0) / float(totale_file)))
                 if percentuale > 99 and conteggio_file < totale_file:
                     percentuale = 99
-                update_queue.put(("set", item_id, "Avanzamento", str(percentuale) + "%"))
 
+                update_queue.put(("set", item_id, "Avanzamento", str(percentuale) + "%"))
                 update_queue.put(("set", item_id, "N. file", str(conteggio_file)))
                 update_queue.put(("set", item_id, "Peso cartella", format_bytes(peso_totale_alunno)))
                 update_queue.put(("set", item_id, "Elenco file", ", ".join(elenco_file_preview)))
 
-                # assicurare 100% a fine loop (evita 99% per arrotondamenti)
-                update_queue.put(("set", item_id, "Avanzamento", "100%"))
+                m = m + 1
 
             try:
                 ftp.quit()
@@ -654,139 +692,97 @@ def create_frame_domini(root, global_config):
             else:
                 testo_data = "n.d."
 
+            # Forza 100% a job concluso
+            update_queue.put(("set", item_id, "Avanzamento", "100%"))
             update_queue.put(("set", item_id, "Ultima modifica", testo_data))
             update_queue.put(("set", item_id, "Stato", stato_base + " / Download OK"))
             update_queue.put(("log", "✅ Download completato per '{}' ({}). Ultima modifica remota: {}".format(alunno, dominio, testo_data)))
 
-        # Avvio di tutti i worker in parallelo
+        # Avvio thread
         threads = []
-        for job in jobs:
-            t = threading.Thread(target=worker_job, args=(job,))
+        i = 0
+        while i < len(jobs):
+            t = threading.Thread(target=worker_job, args=(jobs[i],))
             t.daemon = True
             t.start()
             threads.append(t)
+            i = i + 1
 
         def monitor_thread():
-            i = 0
-            while i < len(threads):
-                threads[i].join()
-                i = i + 1
+            j = 0
+            while j < len(threads):
+                threads[j].join()
+                j = j + 1
             update_queue.put(("fine_download", None))
 
         monitor = threading.Thread(target=monitor_thread, daemon=True)
         monitor.start()
 
-    # ==================================================================
-    # FUNZIONE: ANALISI DELLE SOMIGLIANZE (USANDO similarity_ftp)
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Analisi somiglianze (similarity_ftp)
+    # ------------------------------------------------------------------
     def analizza_somiglianze():
-        """
-        Analizza quattro casi e metriche numeriche di riuso:
-
-        1) Verifica contro dominio personale  -> percentuali di riuso (righe condivise / righe verifica)
-        2) Verifica contro verifiche compagni -> matrice test_vs_test (per heatmap)
-        3) Verifica contro domini compagni    -> matrice test_vs_dom  (per heatmap)
-        4) Dominio personale vs domini compagni -> matrice dom_vs_dom (per heatmap)
-
-        Nel log: per ogni alunno con test + dominio, riepilogo numerico del riuso.
-        """
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona prima la directory principale delle prove (cartelle testXX).",
-            )
+            messagebox.showwarning("Attenzione", "Seleziona prima la directory principale delle prove.")
             return
 
         dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
         if not os.path.isdir(dir_ftp_base):
-            messagebox.showwarning(
-                "Attenzione",
-                "La directory 00_DominiFTP non esiste. Esegui prima il download dai domini.",
-            )
+            messagebox.showwarning("Attenzione", "La directory 00_DominiFTP non esiste. Esegui prima il download.")
             return
 
-        # mappe {studente: directory}
         tests_dirs = {}
         domini_dirs = {}
 
-        for item_id in tree.get_children():
+        items = tree.get_children()
+        i = 0
+        while i < len(items):
+            item_id = items[i]
             valori = list(tree.item(item_id, "values"))
             alunno = valori[0]
-            if not alunno:
-                continue
+            if alunno:
+                nome_cartella_test = testdir_by_item.get(item_id, "")
+                if nome_cartella_test:
+                    percorso_test = os.path.join(base_dir, nome_cartella_test)
+                    if os.path.isdir(percorso_test):
+                        tests_dirs[alunno] = percorso_test
+                dir_dominio_alunno = os.path.join(dir_ftp_base, alunno)
+                if os.path.isdir(dir_dominio_alunno):
+                    domini_dirs[alunno] = dir_dominio_alunno
+            i = i + 1
 
-            nome_cartella_test = testdir_by_item.get(item_id, "")
-            if nome_cartella_test:
-                percorso_test = os.path.join(base_dir, nome_cartella_test)
-                if os.path.isdir(percorso_test):
-                    tests_dirs[alunno] = percorso_test
+        estensioni = (".php", ".html", ".htm", ".css", ".js", ".txt")
 
-            dir_dominio_alunno = os.path.join(dir_ftp_base, alunno)
-            if os.path.isdir(dir_dominio_alunno):
-                domini_dirs[alunno] = dir_dominio_alunno
-
-        estensioni_ammesse = (".php", ".html", ".htm", ".css", ".js", ".txt")
-
-        # Metriche numeriche di riuso per ogni alunno
         metrics_by_student, students_in_test, students_in_domain, texts_test, texts_domain = similarity_ftp.analyze_reuse_by_student(
-            tests_dirs,
-            domini_dirs,
-            estensioni_ammesse
+            tests_dirs, domini_dirs, estensioni
         )
 
-        # Matrici per heatmap (coerenza con similarity.py)
         similarity_results.clear()
 
         if len(students_in_test) >= 2:
             matrice_test_test = similarity_ftp.build_similarity_matrix(students_in_test, texts_test)
-            similarity_results["test_vs_test"] = {
-                "rows": students_in_test,
-                "cols": students_in_test,
-                "matrix": matrice_test_test,
-            }
-        else:
-            matrice_test_test = None
+            similarity_results["test_vs_test"] = {"rows": students_in_test, "cols": students_in_test, "matrix": matrice_test_test}
 
         if len(students_in_domain) >= 2:
             matrice_dom_dom = similarity_ftp.build_similarity_matrix(students_in_domain, texts_domain)
-            similarity_results["dom_vs_dom"] = {
-                "rows": students_in_domain,
-                "cols": students_in_domain,
-                "matrix": matrice_dom_dom,
-            }
-        else:
-            matrice_dom_dom = None
+            similarity_results["dom_vs_dom"] = {"rows": students_in_domain, "cols": students_in_domain, "matrix": matrice_dom_dom}
 
         if len(students_in_test) >= 1 and len(students_in_domain) >= 1:
-            matrice_test_dom = similarity_ftp.build_cross_similarity_matrix(
-                students_in_test,
-                students_in_domain,
-                texts_test,
-                texts_domain,
-            )
-            similarity_results["test_vs_dom"] = {
-                "rows": students_in_test,
-                "cols": students_in_domain,
-                "matrix": matrice_test_dom,
-            }
-        else:
-            matrice_test_dom = None
+            matrice_test_dom = similarity_ftp.build_cross_similarity_matrix(students_in_test, students_in_domain, texts_test, texts_domain)
+            similarity_results["test_vs_dom"] = {"rows": students_in_test, "cols": students_in_domain, "matrix": matrice_test_dom}
 
-        # Log sintetico per alunno con metriche di riuso
         log("=== Analisi somiglianze (riuso verifica vs dominio personale) ===")
-        nomi_metriche = sorted(list(metrics_by_student.keys()))
-        if len(nomi_metriche) == 0:
+        nomi = sorted(list(metrics_by_student.keys()))
+        if len(nomi) == 0:
             log("Nessun alunno con verifica e dominio disponibili per il confronto.")
         else:
             soglia_avviso = 60.0
             soglia_allerta = 80.0
-
-            idx = 0
-            while idx < len(nomi_metriche):
-                nome = nomi_metriche[idx]
+            i = 0
+            while i < len(nomi):
+                nome = nomi[i]
                 m = metrics_by_student[nome]
-
                 sim_globale = m.get("similarity_percent", 0.0)
                 tot_test = m.get("total_lines_test", 0)
                 tot_dom = m.get("total_lines_domain", 0)
@@ -799,82 +795,51 @@ def create_frame_domini(root, global_config):
                         nome, reuse_test, sim_globale, tot_test, tot_dom, condivise, overlap_dom
                     )
                 )
-
                 if reuse_test >= soglia_allerta or sim_globale >= soglia_allerta:
                     log("  ⚠ Valore alto: verificare possibile riuso intenso del codice online.")
                 elif reuse_test >= soglia_avviso or sim_globale >= soglia_avviso:
                     log("  ℹ Valore moderato: possibile riuso parziale.")
+                i = i + 1
 
-                idx = idx + 1
-
-        if not similarity_results:
-            log("Nessuna matrice di similarità calcolabile con i dati correnti.")
-            btn_mappa.configure(state="disabled")
-        else:
-            log("=== Analisi completata. È possibile visualizzare la mappa delle similitudini. ===")
+        if similarity_results:
             btn_mappa.configure(state="normal")
+            log("=== Analisi completata. Puoi aprire la mappa delle similitudini. ===")
+        else:
+            btn_mappa.configure(state="disabled")
+            log("Nessuna matrice di similarità calcolabile con i dati correnti.")
 
-    # ==================================================================
-    # FUNZIONE: MOSTRA MAPPA DELLE SIMILITUDINI (USANDO similarity_ftp)
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Mappa similitudini
+    # ------------------------------------------------------------------
     def mostra_mappa():
         if not similarity_results:
-            messagebox.showinfo(
-                "Informazione",
-                "Non ci sono risultati di similarità da visualizzare. Esegui prima l'analisi.",
-            )
+            messagebox.showinfo("Informazione", "Non ci sono risultati da visualizzare. Esegui prima l'analisi.")
             return
 
-        parent = frame
-
         if "test_vs_test" in similarity_results:
-            dati = similarity_results["test_vs_test"]
-            similarity_ftp.show_heatmap(
-                parent,
-                "Verifica vs verifiche compagni",
-                dati["rows"],
-                dati["cols"],
-                dati["matrix"],
-            )
+            d = similarity_results["test_vs_test"]
+            similarity_ftp.show_heatmap(frame, "Verifica vs verifiche compagni", d["rows"], d["cols"], d["matrix"])
 
         if "dom_vs_dom" in similarity_results:
-            dati = similarity_results["dom_vs_dom"]
-            similarity_ftp.show_heatmap(
-                parent,
-                "Domini personali vs domini compagni",
-                dati["rows"],
-                dati["cols"],
-                dati["matrix"],
-            )
+            d = similarity_results["dom_vs_dom"]
+            similarity_ftp.show_heatmap(frame, "Domini personali vs domini compagni", d["rows"], d["cols"], d["matrix"])
 
         if "test_vs_dom" in similarity_results:
-            dati = similarity_results["test_vs_dom"]
-            similarity_ftp.show_heatmap(
-                parent,
-                "Verifiche vs domini (di tutti)",
-                dati["rows"],
-                dati["cols"],
-                dati["matrix"],
-            )
+            d = similarity_results["test_vs_dom"]
+            similarity_ftp.show_heatmap(frame, "Verifiche vs domini (di tutti)", d["rows"], d["cols"], d["matrix"])
 
-    # ==================================================================
-    # COLLEGAMENTO PULSANTI
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Bind pulsanti e avvio servizio coda
+    # ------------------------------------------------------------------
     btn_scarica.configure(command=scarica_tutti)
     btn_analizza.configure(command=analizza_somiglianze)
     btn_mappa.configure(command=mostra_mappa)
 
-    # ==================================================================
-    # AVVIO DEL PROCESSORE DELLA CODA DI AGGIORNAMENTI
-    # ==================================================================
     process_update_queue()
 
-    # ==================================================================
-    # LAYOUT ELASTICO DELLA FRAME
-    # ==================================================================
+    # Layout elastico
     frame.grid_rowconfigure(1, weight=1)
     frame.grid_columnconfigure(5, weight=1)
 
     log("Frame domini attivo. In attesa di caricamento CSV...")
-
     return frame
