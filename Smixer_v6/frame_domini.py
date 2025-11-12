@@ -293,14 +293,39 @@ def create_frame_domini(root, global_config):
             if not cognome and not dominio:
                 continue
 
+            # Associazione cartella test:
+            # 1) preferenza: <nome_utente>__testNN   (es. 'nome.cognome__test05')
+            #    dove <nome_utente> = valore CSV nel campo 'cognome' (qui usato come "alunno tag")
+            # 2) fallback:   testNN-<cognome>
             found_test = ""
             stato_iniziale = "Test non trovato"
 
-            for td in test_dirs:
-                if td.lower().endswith(cognome):
+            # normalizziamo il "tag alunno" in minuscolo (come i nomi cartella)
+            alunno_tag = cognome
+
+            # 1) match preferito: "<alunno_tag>__test"
+            idx_dir = 0
+            while idx_dir < len(test_dirs):
+                td = test_dirs[idx_dir]
+                td_low = td.lower()
+                if td_low.startswith(alunno_tag + "__test"):
                     found_test = td
                     stato_iniziale = "Test OK"
                     break
+                idx_dir = idx_dir + 1
+
+            # 2) fallback storico: "testNN-<cognome>"
+            if found_test == "":
+                idx_dir = 0
+                while idx_dir < len(test_dirs):
+                    td = test_dirs[idx_dir]
+                    td_low = td.lower()
+                    if td_low.startswith("test") and td_low.endswith(alunno_tag):
+                        found_test = td
+                        stato_iniziale = "Test OK"
+                        break
+                    idx_dir = idx_dir + 1
+
 
             valori = (
                 cognome,        # Alunno
@@ -607,12 +632,17 @@ def create_frame_domini(root, global_config):
                 elif len(elenco_file_preview) == 10:
                     elenco_file_preview.append("...")
 
-                percentuale = int((conteggio_file * 100) / float(totale_file))
+                percentuale = int(round((conteggio_file * 100.0) / float(totale_file)))
+                if percentuale > 99 and conteggio_file < totale_file:
+                    percentuale = 99
+                update_queue.put(("set", item_id, "Avanzamento", str(percentuale) + "%"))
 
-                update_queue.put(("set", item_id, "Avanzamento", "{}%".format(percentuale)))
                 update_queue.put(("set", item_id, "N. file", str(conteggio_file)))
                 update_queue.put(("set", item_id, "Peso cartella", format_bytes(peso_totale_alunno)))
                 update_queue.put(("set", item_id, "Elenco file", ", ".join(elenco_file_preview)))
+
+                # assicurare 100% a fine loop (evita 99% per arrotondamenti)
+                update_queue.put(("set", item_id, "Avanzamento", "100%"))
 
             try:
                 ftp.quit()
