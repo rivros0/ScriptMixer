@@ -1,11 +1,8 @@
-# frame_correzione.py
-
 import tkinter as tk
 from tkinter import ttk, messagebox, Scrollbar
 import os
 import sys
 
-# Aggiunge la cartella superiore al path per gli import locali
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import utils
@@ -14,34 +11,45 @@ import similarity
 import data_handler
 
 
-YELLOW_REPORT_BG = "white"
+YELLOW_REPORT_BG = "#fdfdfd"
 
 
 def create_frame_correzione(root, global_config):
     """
-    Modalità 'Correzione'.
+    Modalità Correzione.
 
-    Usa:
-      - global_config["file_extension"]
-      - global_config["selected_directory"]
-      - global_config["refresh_correzione"] (callback per il pulsante "Aggiorna cartella" in header)
+    Modifiche rispetto alla versione originale:
+      - Rimossa la riga con "Scegli Directory" e la label locale "Directory selezionata".
+      - La riga sulle estensioni è stata spostata PRIMA dell'INTRO.
+      - La directory di lavoro è presa solo da global_config["selected_directory"]
+        (la stessa mostrata nella barra superiore).
+
+    Funzionalità preservate:
+      - Label con esempio di estensioni multiple.
+      - Tabella con colonna "Mix file (clic per copiare)".
+      - Click sulla colonna mix per copiare negli appunti.
+      - Analisi similarità sui *_mix.txt in 00_MixOutput.
     """
 
-    frame_correzione = tk.Frame(root, bg="#089C52")
+    frame_correzione = tk.Frame(root, bg="#089c52")
 
     include_prompt_var = tk.BooleanVar(value=True)
     include_subdir_var = tk.BooleanVar(value=True)
 
     # ======================================================================
-    # RIGA 0: ESTENSIONE (spostata PRIMA dell'INTRO)
+    # RIGA 0: ESTENSIONI (spostata PRIMA dell'INTRO)
     # ======================================================================
-    lbl_extension = tk.Label(frame_correzione, text="Estensione dei file:", bg="white")
+    lbl_extension = tk.Label(
+        frame_correzione,
+        text="Estensioni dei file (es: .php,.html,.css):",
+        bg="white",
+    )
     lbl_extension.grid(row=0, column=0, sticky="w", padx=10, pady=5)
 
     entry_extension = tk.Entry(
         frame_correzione,
         textvariable=global_config["file_extension"],
-        width=15,
+        width=25,
     )
     entry_extension.grid(row=0, column=1, sticky="w", padx=10, pady=5)
 
@@ -49,13 +57,13 @@ def create_frame_correzione(root, global_config):
     # RIGA 1: INTRO / PROMPT
     # ======================================================================
     lbl_prompt = tk.Label(frame_correzione, text="INTRO:", bg="white")
-    lbl_prompt.grid(row=1, column=0, sticky="nw", padx=10, pady=5)
+    lbl_prompt.grid(row=1, column=0, sticky="w", padx=10, pady=5)
 
     entry_prompt = tk.Text(frame_correzione, width=80, height=3)
     entry_prompt.grid(row=1, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
     # ======================================================================
-    # RIGA 2: CHECKBOX INTRO / SUBDIR + PULSANTE MIX
+    # RIGA 2: CHECKBOX + PULSANTE MIX
     # ======================================================================
     btn_mix = tk.Button(frame_correzione, text="Mixa")
     btn_mix.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
@@ -77,7 +85,7 @@ def create_frame_correzione(root, global_config):
     chk_include_subdir.grid(row=2, column=2, sticky="w", padx=10, pady=2)
 
     # ======================================================================
-    # RIGA 3: TREEVIEW RIEPILOGO SUBDIRECTORY
+    # RIGA 3: TREEVIEW (con colonna Mix file)
     # ======================================================================
     tree = ttk.Treeview(
         frame_correzione,
@@ -87,33 +95,134 @@ def create_frame_correzione(root, global_config):
             "num_files",
             "num_extension_files",
             "extension_files",
+            "mix_file",
         ),
         show="headings",
     )
-    tree.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=10, pady=10)
+    tree.grid(row=3, column=0, columnspan=4, sticky="nsew", padx=10, pady=10)
 
     tree.heading("subdirectory", text="Subdirectory")
     tree.heading("num_folders", text="Cartelle")
     tree.heading("num_files", text="File")
-    tree.heading("num_extension_files", text="File con Estensione")
-    tree.heading("extension_files", text="Elenco File Estensione")
+    tree.heading("num_extension_files", text="File con estensione")
+    tree.heading("extension_files", text="Elenco file estensione")
+    tree.heading("mix_file", text="Mix file (clic per copiare)")
 
-    tree.column("subdirectory", width=120, anchor="w")
+    tree.column("subdirectory", width=100, anchor="w")
     tree.column("num_folders", width=80, anchor="center")
     tree.column("num_files", width=80, anchor="center")
     tree.column("num_extension_files", width=140, anchor="center")
-    tree.column("extension_files", width=400, anchor="w")
+    tree.column("extension_files", width=350, anchor="w")
+    tree.column("mix_file", width=220, anchor="w")
 
     frame_correzione.columnconfigure(2, weight=1)
     frame_correzione.rowconfigure(3, weight=1)
 
     # ======================================================================
-    # RIGA 4: PULSANTI OUTPUT / ANALISI
+    # CLICK SULLA COLONNA MIX_FILE -> COPIA IN CLIPBOARD
     # ======================================================================
-    btn_open_directory = tk.Button(frame_correzione, text="Apri Directory Output")
+    def on_tree_click(event):
+        region = tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+
+        item_id = tree.identify_row(event.y)
+        col_id = tree.identify_column(event.x)  # "#1", "#2", ...
+
+        if not item_id:
+            return
+
+        columns = tree["columns"]
+        try:
+            mix_index = columns.index("mix_file")  # 0-based
+        except ValueError:
+            return
+
+        # col_id è "#1" per la prima, "#2" per la seconda, ...
+        if col_id != "#{}".format(mix_index + 1):
+            return
+
+        mix_path = tree.set(item_id, "mix_file")
+        if not mix_path:
+            messagebox.showinfo(
+                "Info",
+                "Per questa subdirectory non è ancora stato creato alcun mix.",
+            )
+            return
+
+        if not os.path.exists(mix_path):
+            messagebox.showwarning(
+                "Attenzione",
+                "Il file di mix non esiste più:\n" + mix_path,
+            )
+            return
+
+        try:
+            try:
+                with open(mix_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(
+                    mix_path,
+                    "r",
+                    encoding="latin-1",
+                    errors="replace",
+                ) as f:
+                    content = f.read()
+        except Exception as exc:
+            messagebox.showerror(
+                "Errore",
+                "Errore nella lettura del file di mix:\n" + str(exc),
+            )
+            return
+
+        root_widget = frame_correzione.winfo_toplevel()
+        root_widget.clipboard_clear()
+        root_widget.clipboard_append(content)
+
+        messagebox.showinfo(
+            "Copiato",
+            "Contenuto di\n"
+            + os.path.basename(mix_path)
+            + "\n"
+            + "copiato negli appunti.",
+        )
+
+    tree.bind("<Button-1>", on_tree_click)
+
+    # ======================================================================
+    # RIGA 4: BOTTONI VARI (Apri dir output / Analizza similarità)
+    # ======================================================================
+    def apri_directory_output():
+        base_dir = global_config["selected_directory"].get().strip()
+        if not base_dir or base_dir.lower() == "nessuna":
+            messagebox.showwarning(
+                "Attenzione",
+                "Seleziona prima una directory di lavoro (dalla barra superiore).",
+            )
+            return
+
+        output_dir = os.path.join(base_dir, "00_MixOutput")
+        data_handler.open_selected_directory(output_dir)
+
+    btn_open_directory = tk.Button(
+        frame_correzione,
+        text="Apri Directory Output",
+        command=apri_directory_output,
+    )
     btn_open_directory.grid(row=4, column=0, sticky="ew", padx=10, pady=5)
 
-    btn_analyze = tk.Button(frame_correzione, text="Analizza Similarità")
+    def analizza_similarita():
+        similarity.analyze_similarities(
+            global_config["selected_directory"],  # StringVar gestita da similarity._resolve_directory_source
+            report_text,
+        )
+
+    btn_analyze = tk.Button(
+        frame_correzione,
+        text="Analizza Similarità",
+        command=analizza_similarita,
+    )
     btn_analyze.grid(row=4, column=1, sticky="ew", padx=10, pady=5)
 
     # ======================================================================
@@ -131,48 +240,44 @@ def create_frame_correzione(root, global_config):
     report_text.grid(
         row=6,
         column=0,
-        columnspan=3,
+        columnspan=4,
         sticky="nsew",
         padx=10,
         pady=5,
     )
 
-    scrollbar = Scrollbar(frame_correzione, orient="vertical", command=report_text.yview)
-    scrollbar.grid(row=6, column=3, sticky="ns", pady=5)
-    report_text.config(yscrollcommand=scrollbar.set)
+    scrollbar = Scrollbar(
+        frame_correzione,
+        orient="vertical",
+        command=report_text.yview,
+    )
+    scrollbar.grid(row=6, column=4, sticky="ns", pady=5)
 
+    report_text.config(yscrollcommand=scrollbar.set)
     frame_correzione.rowconfigure(6, weight=1)
 
     # ======================================================================
-    # LOGICA DI AGGIORNAMENTO (selected_directory)
+    # AGGIORNAMENTO AUTOMATICO SU CAMBIO selected_directory
     # ======================================================================
-
     def refresh_current_directory_state():
         """
-        Aggiorna log e tabella in base alla directory selezionata globale.
-
-        Usato:
-          - dal trace su global_config["selected_directory"]
-          - dal pulsante 'Aggiorna cartella' nella barra superiore
-            tramite global_config["refresh_correzione"].
+        Aggiorna il log e la tabella in base a global_config["selected_directory"].
         """
         path = global_config["selected_directory"].get().strip()
 
+        report_text.delete("1.0", "end")
+        tree.delete(*tree.get_children())
+
         if not path or path.lower() == "nessuna":
-            report_text.delete("1.0", "end")
-            tree.delete(*tree.get_children())
             report_text.insert(
                 "end",
                 "Nessuna directory selezionata.\n"
-                "Seleziona la directory dalla barra superiore (clic sulla voce blu)\n"
-                "oppure crea una copia locale dalla scheda Preparazione o Live.\n",
+                "Seleziona la directory dalla barra superiore (clic sulla voce blu).\n",
             )
             report_text.see("end")
             return
 
         if not os.path.isdir(path):
-            report_text.delete("1.0", "end")
-            tree.delete(*tree.get_children())
             report_text.insert(
                 "end",
                 "La directory selezionata non esiste:\n" + path + "\n",
@@ -180,16 +285,10 @@ def create_frame_correzione(root, global_config):
             report_text.see("end")
             return
 
-        # Aggiorna log con lista file
         utils.update_directory_listing(path, entry_extension, report_text)
-
-        # Aggiorna tabella subdirectory
         utils.update_subdirectories_list(path, tree, entry_extension)
 
     def on_selected_directory_change(*_args):
-        """
-        Richiamata quando cambia global_config["selected_directory"].
-        """
         refresh_current_directory_state()
 
     sel_dir_var = global_config.get("selected_directory")
@@ -199,20 +298,15 @@ def create_frame_correzione(root, global_config):
         elif hasattr(sel_dir_var, "trace"):
             sel_dir_var.trace("w", on_selected_directory_change)
 
-    # Registrazione callback per il pulsante globale "Aggiorna cartella"
+    # possibilità di richiamare il refresh da fuori (bottone "Aggiorna cartella" in header)
     global_config["refresh_correzione"] = refresh_current_directory_state
 
     # ======================================================================
-    # CALLBACK PULSANTI
+    # PULSANTE MIX (usa la directory globale)
     # ======================================================================
-
     def do_mix():
-        """
-        Avvia il mix dei file per le sottocartelle elencate nella tabella.
-        Usa la directory globale selezionata.
-        """
         business_logic.mix_files(
-            global_config["selected_directory"],  # StringVar (gestita da _resolve_base_directory)
+            global_config["selected_directory"],  # StringVar, gestita da business_logic._resolve_base_directory
             entry_prompt,
             entry_extension,
             tree,
@@ -221,30 +315,7 @@ def create_frame_correzione(root, global_config):
             include_subdir_var.get(),
         )
 
-    def apri_directory_output():
-        """
-        Apre la directory 00_MixOutput sotto la directory selezionata.
-        """
-        base_dir = global_config["selected_directory"].get().strip()
-        if not base_dir or base_dir.lower() == "nessuna":
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona prima una directory di lavoro (Preparazione / Correzione).",
-            )
-            return
-
-        output_dir = os.path.join(base_dir, "00_MixOutput")
-        data_handler.open_selected_directory(output_dir)
-
-    def analizza_similarita():
-        """
-        Avvia l'analisi delle similarità sui file *_mix.txt presenti in 00_MixOutput.
-        """
-        similarity.analyze_similarities(global_config["selected_directory"], report_text)
-
     btn_mix.config(command=do_mix)
-    btn_open_directory.config(command=apri_directory_output)
-    btn_analyze.config(command=analizza_similarita)
 
     # ======================================================================
     # MESSAGGIO INIZIALE
@@ -252,15 +323,16 @@ def create_frame_correzione(root, global_config):
     report_text.insert(
         "end",
         "Modalità Correzione pronta.\n"
-        "1) Seleziona la directory di lavoro dalla barra superiore (clic sulla directory blu)\n"
-        "   oppure crea una copia locale in Preparazione / Live.\n"
-        "2) Imposta l'estensione (es. .cpp) e l'INTRO se desiderato.\n"
+        "1) Seleziona la directory dalla barra superiore (clic su 'nessuna' / percorso).\n"
+        "2) Imposta le estensioni (es. .php,.html,.css) e l'intro.\n"
         "3) Premi 'Mixa' per generare i file *_mix.txt in 00_MixOutput.\n"
-        "4) Usa 'Apri Directory Output' e 'Analizza Similarità' per le fasi successive.\n",
+        "   → la colonna 'Mix file' mostrerà il percorso del file di mix.\n"
+        "   → cliccando su una cella di quella colonna, il contenuto verrà copiato negli appunti.\n"
+        "4) Usa Export / 'Analizza Similarità' per esportare e analizzare.\n",
     )
     report_text.see("end")
 
-    # All'avvio: sincronizza lo stato attuale
+    # All'avvio sincronizziamo lo stato attuale, se già presente
     refresh_current_directory_state()
 
     return frame_correzione

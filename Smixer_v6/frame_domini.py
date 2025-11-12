@@ -94,7 +94,7 @@ def create_frame_domini(root, global_config):
     lbl_peso_totale = tk.Label(
         frame,
         text="Totale FTP: 0 B",
-        bg=YELLOW_BG,
+        bg='white',
         anchor="e",
     )
     lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")

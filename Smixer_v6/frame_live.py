@@ -93,7 +93,7 @@ def create_frame_live(root, global_config):
 
     frame.grid_rowconfigure(2, weight=1)
     frame.grid_columnconfigure(3, weight=1)
-
+    '''
     # === Nome verifica === #
     lbl_nome_verifica = tk.Label(frame, text="Nome verifica:", bg="white")
     lbl_nome_verifica.grid(row=3, column=0, sticky="w", padx=5, pady=5)
@@ -104,10 +104,12 @@ def create_frame_live(root, global_config):
         textvariable=global_config["verifica_name"],
     )
     entry_verifica.grid(row=3, column=1, padx=5, pady=5, sticky="w")
-
+    '''
     # === Pulsante crea copia locale === #
+    
+
     lbl_esito = tk.Label(frame, text="", fg="green", bg="white")
-    lbl_esito.grid(row=3, column=3, columnspan=2, sticky="w", padx=5, pady=5)
+    lbl_esito.grid(row=3, column=1, columnspan=4, sticky="w", padx=5, pady=5)
 
     def crea_copia():
         nome_verifica = global_config["verifica_name"].get().strip()
@@ -122,8 +124,9 @@ def create_frame_live(root, global_config):
             esito = copy_test_directories(directory_remota, destinazione, nome_verifica)
             lbl_esito.config(text=esito)
 
-    btn_copy = tk.Button(frame, text="Crea copia locale", command=crea_copia)
-    btn_copy.grid(row=3, column=2, padx=5, pady=5)
+    btn_copy = tk.Button(frame, text="Crea copia locale", command=crea_copia, bg='lime', font=( 'bold') )
+    btn_copy.grid(row=3, column=0, padx=5, pady=5 )
+   
 
     # === Aggiornamento periodico "a goccia" === #
     auto_job_id = None
