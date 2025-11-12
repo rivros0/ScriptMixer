@@ -7,9 +7,10 @@ import queue
 from ftplib import FTP
 from datetime import datetime
 
-import similarity
+# Nuovo modulo dedicato all'analisi dei contenuti FTP e confronto con verifiche
+import similarity_ftp
 
-YELLOW_BG = "#5d0066"
+YELLOW_BG = "#85187c"
 
 
 def format_bytes(num_bytes):
@@ -61,7 +62,7 @@ def create_frame_domini(root, global_config):
         Nome alunno, dominio, stato, avanzamento, numero file,
         elenco file, peso complessivo cartella, ultima modifica
     - Label in alto a destra con peso complessivo di 00_DominiFTP
-    - Analisi delle somiglianze e mappa delle similitudini
+    - Analisi delle somiglianze e mappa delle similitudini (via similarity_ftp)
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
@@ -94,7 +95,7 @@ def create_frame_domini(root, global_config):
     lbl_peso_totale = tk.Label(
         frame,
         text="Totale FTP: 0 B",
-        bg='white',
+        bg=YELLOW_BG,
         anchor="e",
     )
     lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")
@@ -407,12 +408,8 @@ def create_frame_domini(root, global_config):
     # ==================================================================
     def scarica_tutti():
         """
-        Per ogni riga in tabella:
-        - prepara un job con i dati necessari
-        - lancia un thread worker per ciascun job (in parallelo)
-        - i thread lavorano sull'FTP e mandano gli aggiornamenti GUI sulla coda
-        - un thread "monitor" attende la fine di tutti i worker e manda
-          in coda l'evento "fine_download".
+        Avvia in parallelo i download FTP per tutte le righe della tabella.
+        Aggiornamenti GUI veicolati tramite coda (thread-safe).
         """
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
@@ -440,7 +437,7 @@ def create_frame_domini(root, global_config):
         btn_mappa.configure(state="disabled")
         similarity_results.clear()
 
-        # prepara lista di job (lettura dei dati SOLO nel main thread)
+        # Preparazione job
         jobs = []
         for item_id in items:
             valori_correnti = list(tree.item(item_id, "values"))
@@ -461,9 +458,7 @@ def create_frame_domini(root, global_config):
 
         def worker_job(job):
             """
-            Thread worker per un singolo dominio.
-            Fa TUTTO il lavoro di FTP e invia aggiornamenti alla GUI
-            tramite la coda 'update_queue'.
+            Thread worker per un singolo dominio: connessione FTP, download, aggiornamenti GUI.
             """
             item_id = job["item_id"]
             alunno = job["alunno"]
@@ -476,7 +471,7 @@ def create_frame_domini(root, global_config):
             if host and not host.startswith("ftp."):
                 host = "ftp." + host
 
-            # reset campi di avanzamento (tramite coda)
+            # reset campi di avanzamento
             update_queue.put(("set", item_id, "Stato", stato_base + " / Connessione FTP..."))
             update_queue.put(("set", item_id, "Avanzamento", "0%"))
             update_queue.put(("set", item_id, "N. file", "0"))
@@ -490,12 +485,7 @@ def create_frame_domini(root, global_config):
                 return
 
             if not ftp_user or not ftp_pass:
-                update_queue.put(
-                    (
-                        "log",
-                        "❌ Credenziali mancanti per '{}' ({}).".format(alunno, dominio),
-                    )
-                )
+                update_queue.put(("log", "❌ Credenziali mancanti per '{}' ({}).".format(alunno, dominio)))
                 update_queue.put(("set", item_id, "Stato", "Errore: credenziali mancanti"))
                 return
 
@@ -505,31 +495,15 @@ def create_frame_domini(root, global_config):
                 ftp = FTP(host, timeout=30, encoding="latin-1")
                 ftp.login(user=ftp_user, passwd=ftp_pass)
                 update_queue.put(("set", item_id, "Stato", stato_base + " / Login OK"))
-                update_queue.put(
-                    (
-                        "log",
-                        "✅ Login riuscito su {} per '{}'".format(
-                            host,
-                            alunno,
-                        ),
-                    )
-                )
+                update_queue.put(("log", "✅ Login riuscito su {} per '{}'".format(host, alunno)))
             except Exception as e:
                 update_queue.put(("set", item_id, "Stato", "Errore login FTP"))
-                update_queue.put(
-                    (
-                        "log",
-                        "❌ Errore di connessione/login {} per '{}': {}".format(
-                            host,
-                            alunno,
-                            e,
-                        ),
-                    )
-                )
+                update_queue.put(("log", "❌ Errore di connessione/login {} per '{}': {}".format(host, alunno, e)))
                 return
 
             nome_cartella_alunno = alunno if alunno else "sconosciuto"
-            dir_locale_alunno = os.path.join(dir_ftp_base, nome_cartella_alunno)
+            dir_ftp_base_local = os.path.join(base_dir, "00_DominiFTP")
+            dir_locale_alunno = os.path.join(dir_ftp_base_local, nome_cartella_alunno)
             if not os.path.isdir(dir_locale_alunno):
                 try:
                     os.makedirs(dir_locale_alunno, exist_ok=True)
@@ -586,23 +560,8 @@ def create_frame_domini(root, global_config):
 
             totale_file = len(lista_file_remoti)
             if totale_file == 0:
-                update_queue.put(
-                    (
-                        "set",
-                        item_id,
-                        "Stato",
-                        stato_base + " / Nessun file remoto",
-                    )
-                )
-                update_queue.put(
-                    (
-                        "log",
-                        "ℹ Nessun file trovato su {} per '{}'".format(
-                            dominio,
-                            alunno,
-                        ),
-                    )
-                )
+                update_queue.put(("set", item_id, "Stato", stato_base + " / Nessun file remoto"))
+                update_queue.put(("log", "ℹ Nessun file trovato su {} per '{}'".format(dominio, alunno)))
                 try:
                     ftp.quit()
                 except Exception:
@@ -618,10 +577,7 @@ def create_frame_domini(root, global_config):
                 cartella_locale_corrente = dir_locale_alunno
 
                 for nome_dir in parti[:-1]:
-                    cartella_locale_corrente = os.path.join(
-                        cartella_locale_corrente,
-                        nome_dir,
-                    )
+                    cartella_locale_corrente = os.path.join(cartella_locale_corrente, nome_dir)
                     if not os.path.isdir(cartella_locale_corrente):
                         try:
                             os.makedirs(cartella_locale_corrente, exist_ok=True)
@@ -653,26 +609,10 @@ def create_frame_domini(root, global_config):
 
                 percentuale = int((conteggio_file * 100) / float(totale_file))
 
-                update_queue.put(
-                    ("set", item_id, "Avanzamento", "{}%".format(percentuale))
-                )
+                update_queue.put(("set", item_id, "Avanzamento", "{}%".format(percentuale)))
                 update_queue.put(("set", item_id, "N. file", str(conteggio_file)))
-                update_queue.put(
-                    (
-                        "set",
-                        item_id,
-                        "Peso cartella",
-                        format_bytes(peso_totale_alunno),
-                    )
-                )
-                update_queue.put(
-                    (
-                        "set",
-                        item_id,
-                        "Elenco file",
-                        ", ".join(elenco_file_preview),
-                    )
-                )
+                update_queue.put(("set", item_id, "Peso cartella", format_bytes(peso_totale_alunno)))
+                update_queue.put(("set", item_id, "Elenco file", ", ".join(elenco_file_preview)))
 
             try:
                 ftp.quit()
@@ -684,27 +624,11 @@ def create_frame_domini(root, global_config):
             else:
                 testo_data = "n.d."
 
-            update_queue.put(( "set", item_id, "Ultima modifica", testo_data))
-            update_queue.put(
-                (
-                    "set",
-                    item_id,
-                    "Stato",
-                    stato_base + " / Download OK",
-                )
-            )
-            update_queue.put(
-                (
-                    "log",
-                    "✅ Download completato per '{}' ({}). Ultima modifica remota: {}".format(
-                        alunno,
-                        dominio,
-                        testo_data,
-                    ),
-                )
-            )
+            update_queue.put(("set", item_id, "Ultima modifica", testo_data))
+            update_queue.put(("set", item_id, "Stato", stato_base + " / Download OK"))
+            update_queue.put(("log", "✅ Download completato per '{}' ({}). Ultima modifica remota: {}".format(alunno, dominio, testo_data)))
 
-        # avvio di tutti i worker in parallelo
+        # Avvio di tutti i worker in parallelo
         threads = []
         for job in jobs:
             t = threading.Thread(target=worker_job, args=(job,))
@@ -713,29 +637,28 @@ def create_frame_domini(root, global_config):
             threads.append(t)
 
         def monitor_thread():
-            indice = 0
-            while indice < len(threads):
-                threads[indice].join()
-                indice = indice + 1
+            i = 0
+            while i < len(threads):
+                threads[i].join()
+                i = i + 1
             update_queue.put(("fine_download", None))
 
         monitor = threading.Thread(target=monitor_thread, daemon=True)
         monitor.start()
 
     # ==================================================================
-    # FUNZIONE: ANALISI DELLE SOMIGLIANZE
+    # FUNZIONE: ANALISI DELLE SOMIGLIANZE (USANDO similarity_ftp)
     # ==================================================================
     def analizza_somiglianze():
         """
-        Analizza le somiglianze secondo i casi richiesti:
+        Analizza quattro casi e metriche numeriche di riuso:
 
-        1) Verifica contro dominio personale
-        2) Verifica contro verifiche dei compagni
-        3) Verifica contro domini dei compagni
-        4) Dominio personale contro domini dei compagni
+        1) Verifica contro dominio personale  -> percentuali di riuso (righe condivise / righe verifica)
+        2) Verifica contro verifiche compagni -> matrice test_vs_test (per heatmap)
+        3) Verifica contro domini compagni    -> matrice test_vs_dom  (per heatmap)
+        4) Dominio personale vs domini compagni -> matrice dom_vs_dom (per heatmap)
 
-        I risultati vengono riassunti nel log e salvati in 'similarity_results'
-        per la visualizzazione della mappa.
+        Nel log: per ogni alunno con test + dominio, riepilogo numerico del riuso.
         """
         base_dir = global_config["selected_directory"].get().strip()
         if not base_dir or not os.path.isdir(base_dir):
@@ -753,14 +676,13 @@ def create_frame_domini(root, global_config):
             )
             return
 
-        # Costruzione delle mappe {studente: directory_verifica} e {studente: directory_dominio}
+        # mappe {studente: directory}
         tests_dirs = {}
         domini_dirs = {}
 
         for item_id in tree.get_children():
             valori = list(tree.item(item_id, "values"))
             alunno = valori[0]
-
             if not alunno:
                 continue
 
@@ -776,164 +698,96 @@ def create_frame_domini(root, global_config):
 
         estensioni_ammesse = (".php", ".html", ".htm", ".css", ".js", ".txt")
 
-        studenti_test, testi_test = similarity.build_texts_from_directories(
+        # Metriche numeriche di riuso per ogni alunno
+        metrics_by_student, students_in_test, students_in_domain, texts_test, texts_domain = similarity_ftp.analyze_reuse_by_student(
             tests_dirs,
-            estensioni_ammesse,
-        )
-        studenti_domini, testi_domini = similarity.build_texts_from_directories(
             domini_dirs,
-            estensioni_ammesse,
+            estensioni_ammesse
         )
 
+        # Matrici per heatmap (coerenza con similarity.py)
         similarity_results.clear()
 
-        if len(studenti_test) >= 2:
-            matrice_test_test = similarity.build_similarity_matrix(studenti_test, testi_test)
+        if len(students_in_test) >= 2:
+            matrice_test_test = similarity_ftp.build_similarity_matrix(students_in_test, texts_test)
             similarity_results["test_vs_test"] = {
-                "rows": studenti_test,
-                "cols": studenti_test,
+                "rows": students_in_test,
+                "cols": students_in_test,
                 "matrix": matrice_test_test,
             }
         else:
             matrice_test_test = None
 
-        if len(studenti_domini) >= 2:
-            matrice_dom_dom = similarity.build_similarity_matrix(studenti_domini, testi_domini)
+        if len(students_in_domain) >= 2:
+            matrice_dom_dom = similarity_ftp.build_similarity_matrix(students_in_domain, texts_domain)
             similarity_results["dom_vs_dom"] = {
-                "rows": studenti_domini,
-                "cols": studenti_domini,
+                "rows": students_in_domain,
+                "cols": students_in_domain,
                 "matrix": matrice_dom_dom,
             }
         else:
             matrice_dom_dom = None
 
-        if len(studenti_test) >= 1 and len(studenti_domini) >= 1:
-            matrice_test_dom = similarity.build_cross_similarity_matrix(
-                studenti_test,
-                studenti_domini,
-                testi_test,
-                testi_domini,
+        if len(students_in_test) >= 1 and len(students_in_domain) >= 1:
+            matrice_test_dom = similarity_ftp.build_cross_similarity_matrix(
+                students_in_test,
+                students_in_domain,
+                texts_test,
+                texts_domain,
             )
             similarity_results["test_vs_dom"] = {
-                "rows": studenti_test,
-                "cols": studenti_domini,
+                "rows": students_in_test,
+                "cols": students_in_domain,
                 "matrix": matrice_test_dom,
             }
         else:
             matrice_test_dom = None
 
-        log("=== Analisi somiglianze avviata ===")
+        # Log sintetico per alunno con metriche di riuso
+        log("=== Analisi somiglianze (riuso verifica vs dominio personale) ===")
+        nomi_metriche = sorted(list(metrics_by_student.keys()))
+        if len(nomi_metriche) == 0:
+            log("Nessun alunno con verifica e dominio disponibili per il confronto.")
+        else:
+            soglia_avviso = 60.0
+            soglia_allerta = 80.0
 
-        soglia_alta = 80.0
-        soglia_media = 60.0
+            idx = 0
+            while idx < len(nomi_metriche):
+                nome = nomi_metriche[idx]
+                m = metrics_by_student[nome]
 
-        # Report sintetico per ogni studente
-        for nome in sorted(set(list(studenti_test) + list(studenti_domini))):
-            descrizioni = []
+                sim_globale = m.get("similarity_percent", 0.0)
+                tot_test = m.get("total_lines_test", 0)
+                tot_dom = m.get("total_lines_domain", 0)
+                condivise = m.get("shared_lines_count", 0)
+                reuse_test = m.get("percent_reuse_from_domain_on_test", 0.0)
+                overlap_dom = m.get("percent_overlap_on_domain", 0.0)
 
-            # 1) Verifica contro dominio personale
-            valore_personale = None
-            if matrice_test_dom is not None and nome in studenti_test and nome in studenti_domini:
-                indice_test = studenti_test.index(nome)
-                indice_dom = studenti_domini.index(nome)
-                valore_personale = matrice_test_dom[indice_test][indice_dom]
-                descrizioni.append(
-                    "V vs Dom pers: {:.1f}%".format(valore_personale)
+                log(
+                    "{} -> Riuso dal dominio: {:.1f}%  |  Similarità globale: {:.1f}%  |  Righe test: {}  |  Righe dominio: {}  |  Righe condivise: {}  |  Copertura su dominio: {:.1f}%".format(
+                        nome, reuse_test, sim_globale, tot_test, tot_dom, condivise, overlap_dom
+                    )
                 )
 
-            # 2) Verifica contro verifiche dei compagni
-            if matrice_test_test is not None and nome in studenti_test:
-                indice = studenti_test.index(nome)
-                miglior = 0.0
-                miglior_nome = ""
+                if reuse_test >= soglia_allerta or sim_globale >= soglia_allerta:
+                    log("  ⚠ Valore alto: verificare possibile riuso intenso del codice online.")
+                elif reuse_test >= soglia_avviso or sim_globale >= soglia_avviso:
+                    log("  ℹ Valore moderato: possibile riuso parziale.")
 
-                indice_compagno = 0
-                while indice_compagno < len(studenti_test):
-                    if indice_compagno != indice:
-                        valore = matrice_test_test[indice][indice_compagno]
-                        if valore > miglior:
-                            miglior = valore
-                            miglior_nome = studenti_test[indice_compagno]
-                    indice_compagno = indice_compagno + 1
-
-                if miglior_nome:
-                    descrizioni.append(
-                        "V vs V comp: {:.1f}% con {}".format(miglior, miglior_nome)
-                    )
-
-            # 3) Verifica contro domini dei compagni
-            if matrice_test_dom is not None and nome in studenti_test:
-                indice = studenti_test.index(nome)
-                miglior = 0.0
-                miglior_nome = ""
-
-                indice_compagno = 0
-                while indice_compagno < len(studenti_domini):
-                    nome_dom = studenti_domini[indice_compagno]
-                    if nome_dom != nome:
-                        valore = matrice_test_dom[indice][indice_compagno]
-                        if valore > miglior:
-                            miglior = valore
-                            miglior_nome = nome_dom
-                    indice_compagno = indice_compagno + 1
-
-                if miglior_nome:
-                    descrizioni.append(
-                        "V vs Dom comp: {:.1f}% con dominio {}".format(
-                            miglior,
-                            miglior_nome,
-                        )
-                    )
-
-            # 4) Dominio personale contro domini dei compagni
-            if matrice_dom_dom is not None and nome in studenti_domini:
-                indice = studenti_domini.index(nome)
-                miglior = 0.0
-                miglior_nome = ""
-
-                indice_compagno = 0
-                while indice_compagno < len(studenti_domini):
-                    if indice_compagno != indice:
-                        valore = matrice_dom_dom[indice][indice_compagno]
-                        if valore > miglior:
-                            miglior = valore
-                            miglior_nome = studenti_domini[indice_compagno]
-                    indice_compagno = indice_compagno + 1
-
-                if miglior_nome:
-                    descrizioni.append(
-                        "Dom vs Dom comp: {:.1f}% con {}".format(
-                            miglior,
-                            miglior_nome,
-                        )
-                    )
-
-            if not descrizioni:
-                continue
-
-            riga = nome + " -> " + " | ".join(descrizioni)
-            log(riga)
-
-            if valore_personale is not None:
-                if valore_personale >= soglia_alta:
-                    log("  ⚠ Verifica molto simile al dominio personale (possibile riuso intenso del codice online).")
-                elif valore_personale >= soglia_media:
-                    log("  ℹ Verifica moderatamente simile al dominio personale (riuso parziale del codice online possibile).")
+                idx = idx + 1
 
         if not similarity_results:
             log("Nessuna matrice di similarità calcolabile con i dati correnti.")
             btn_mappa.configure(state="disabled")
         else:
-            log("=== Analisi somiglianze completata ===")
+            log("=== Analisi completata. È possibile visualizzare la mappa delle similitudini. ===")
             btn_mappa.configure(state="normal")
 
     # ==================================================================
-    # FUNZIONE: MOSTRA MAPPA DELLE SIMILITUDINI
+    # FUNZIONE: MOSTRA MAPPA DELLE SIMILITUDINI (USANDO similarity_ftp)
     # ==================================================================
     def mostra_mappa():
-        """
-        Mostra una o più heatmap delle matrici calcolate in 'analizza_somiglianze'.
-        """
         if not similarity_results:
             messagebox.showinfo(
                 "Informazione",
@@ -945,7 +799,7 @@ def create_frame_domini(root, global_config):
 
         if "test_vs_test" in similarity_results:
             dati = similarity_results["test_vs_test"]
-            similarity.show_heatmap(
+            similarity_ftp.show_heatmap(
                 parent,
                 "Verifica vs verifiche compagni",
                 dati["rows"],
@@ -955,7 +809,7 @@ def create_frame_domini(root, global_config):
 
         if "dom_vs_dom" in similarity_results:
             dati = similarity_results["dom_vs_dom"]
-            similarity.show_heatmap(
+            similarity_ftp.show_heatmap(
                 parent,
                 "Domini personali vs domini compagni",
                 dati["rows"],
@@ -965,7 +819,7 @@ def create_frame_domini(root, global_config):
 
         if "test_vs_dom" in similarity_results:
             dati = similarity_results["test_vs_dom"]
-            similarity.show_heatmap(
+            similarity_ftp.show_heatmap(
                 parent,
                 "Verifiche vs domini (di tutti)",
                 dati["rows"],
