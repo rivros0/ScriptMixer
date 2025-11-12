@@ -262,6 +262,7 @@ def create_frame_correzione(root, global_config):
     def refresh_current_directory_state():
         """
         Aggiorna il log e la tabella in base a global_config["selected_directory"].
+        Esclude tutte le subdirectory che iniziano con '00' dalla tabella.
         """
         path = global_config["selected_directory"].get().strip()
 
@@ -285,8 +286,23 @@ def create_frame_correzione(root, global_config):
             report_text.see("end")
             return
 
+        # Popola log e tabella con la funzione esistente
         utils.update_directory_listing(path, entry_extension, report_text)
         utils.update_subdirectories_list(path, tree, entry_extension)
+
+        # --- FILTRO post-popolamento: rimuove le subdirectory che iniziano con '00' ---
+        # Nota: non modifichiamo utils; filtriamo qui gli item già inseriti nella treeview.
+        all_items = tree.get_children()
+        idx = 0
+        while idx < len(all_items):
+            item_id = all_items[idx]
+            values = tree.item(item_id, "values")
+            if values and len(values) > 0:
+                subdir_name = str(values[0]).strip()
+                if subdir_name.startswith("00"):
+                    tree.delete(item_id)
+            idx = idx + 1
+
 
     def on_selected_directory_change(*_args):
         refresh_current_directory_state()

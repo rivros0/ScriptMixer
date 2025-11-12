@@ -203,6 +203,9 @@ def create_mix_file(
 
     Restituisce:
       (messaggio_di_log, percorso_mix_file_oppure_None)
+
+    Modifica: ignora qualunque sottocartella che inizi con '00'
+              all'interno della subdirectory del test.
     """
     full_path = os.path.join(base_directory, subdir)
     mix_file_path = os.path.join(output_directory, subdir + "_mix.txt")
@@ -210,13 +213,36 @@ def create_mix_file(
     try:
         files_to_mix = []
 
-        for root, _dirs, files in os.walk(full_path):
-            for file_name in files:
+        # Filtro delle sottocartelle: esclude quelle che iniziano con '00'
+        for root, dirs, files in os.walk(full_path):
+            # modifica in-place di dirs per impedire la discesa in '00*'
+            safe_dirs = []
+            idx = 0
+            while idx < len(dirs):
+                dname = dirs[idx]
+                if not str(dname).startswith("00"):
+                    safe_dirs.append(dname)
+                idx = idx + 1
+            dirs[:] = safe_dirs
+
+            # raccolta file con estensioni richieste
+            j = 0
+            while j < len(files):
+                file_name = files[j]
                 lower_name = file_name.lower()
-                for ext in extensions:
+
+                k = 0
+                matched = False
+                while k < len(extensions):
+                    ext = extensions[k]
                     if lower_name.endswith(ext):
-                        files_to_mix.append(os.path.join(root, file_name))
+                        matched = True
                         break
+                    k = k + 1
+
+                if matched:
+                    files_to_mix.append(os.path.join(root, file_name))
+                j = j + 1
 
         if not files_to_mix:
             message = (
@@ -224,7 +250,8 @@ def create_mix_file(
                 + ", ".join(extensions)
                 + " trovato nella subdirectory "
                 + subdir
-                + ".\nFile di mix NON creato.\n"
+                + " (sottocartelle '00*' escluse).\n"
+                + "File di mix NON creato.\n"
             )
             return message, None
 
@@ -235,7 +262,9 @@ def create_mix_file(
             if include_subdir:
                 mix_file.write(subdir + "\n\n")
 
-            for file_path in files_to_mix:
+            z = 0
+            while z < len(files_to_mix):
+                file_path = files_to_mix[z]
                 try:
                     with open(file_path, "r", encoding="utf-8") as current_file:
                         content = current_file.read()
@@ -252,6 +281,7 @@ def create_mix_file(
                     "###############################################################\n\n"
                 )
                 mix_file.write(os.path.basename(file_path) + "\n" + content + "\n")
+                z = z + 1
 
         message = (
             "Mix completato per "
@@ -260,12 +290,13 @@ def create_mix_file(
             + ", ".join(extensions)
             + " uniti con successo in "
             + os.path.basename(mix_file_path)
-            + ".\n"
+            + " (sottocartelle '00*' escluse).\n"
         )
         return message, mix_file_path
 
     except Exception as exc:
         return "Errore durante il mix per " + subdir + ": " + str(exc) + "\n", None
+
 
 
 # =============================================================================
