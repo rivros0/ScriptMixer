@@ -1,13 +1,23 @@
 """
 similarity_ftp.py
-Analisi del riuso di codice tra verifiche locali e contenuti scaricati dai domini FTP.
+Analisi del riuso tra VERIFICHE LOCALI e DOMINI (FTP) con merge per dominio.
 
-FUNZIONI PRINCIPALI (API):
+NOVITÀ:
+- Per ciascun dominio viene creato un file di merge: "__MERGED__.txt"
+  che contiene la concatenazione dei file ammessi (estensioni filtro).
+- Il confronto principale è: VERIFICA dello studente  vs  MERGE del suo DOMINIO.
+- Metriche numeriche restituite:
+    * similarity_percent (difflib)
+    * shared_lines_count (conteggio righe identiche "significative")
+    * shared_chars_len (somma caratteri dei blocchi identici ≥ soglia)
+    * percent_shared_chars_on_test (shared_chars_len / len(test_text) * 100)
+
+API:
+- generate_domain_merges(domini_dirs, allowed_extensions) -> (merged_texts_by_student, merged_paths_by_student)
 - read_text_from_directory(directory_path, allowed_extensions) -> str
-- calculate_text_similarity_percent(text1, text2) -> float
-- compute_reuse_metrics(test_text, domain_text) -> dict
+- compute_merge_metrics(test_text, merged_domain_text, min_line_len=4, min_block_chars=8) -> dict
 - analyze_reuse_by_student(tests_dirs, domini_dirs, allowed_extensions)
-    -> (metrics_by_student, students_in_test, students_in_domain, texts_test, texts_domain)
+    -> (metrics_by_student, students_in_test, students_in_domain, texts_test, merged_domain_texts)
 - build_similarity_matrix(student_names, texts_by_student) -> list[list[float]]
 - build_cross_similarity_matrix(row_names, col_names, row_texts, col_texts) -> list[list[float]]
 - show_heatmap(parent, titolo, row_labels, col_labels, matrix) -> None
@@ -15,12 +25,11 @@ FUNZIONI PRINCIPALI (API):
 
 import os
 import difflib
-from datetime import datetime
 
 import tkinter as tk
 from tkinter import Toplevel, messagebox
 
-# Matplotlib è usata solo se disponibile; la GUI resta stabile anche senza.
+# Matplotlib (opzionale ma consigliato per heatmap)
 try:
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -32,7 +41,7 @@ except Exception:
 
 
 # ======================================================================
-# UTILITÀ DI LETTURA / NORMALIZZAZIONE
+# LETTURA E NORMALIZZAZIONE TESTO
 # ======================================================================
 
 def _safe_read_text(file_path):
@@ -68,57 +77,54 @@ def _safe_read_text(file_path):
 
 def _normalize_text_for_code(text):
     """
-    Normalizza testo per confronto.
-    - Normalizza a capo
-    - Rimuove righe vuote
-    - Rimuove righe di commento comuni (best-effort)
-    - Effettua strip per riga
-    Nota: non cambia il case (PHP/CSS/JS possono essere case-sensitive in parti).
+    Normalizza testo per confronto:
+    - normalizza a capo
+    - rimuove righe vuote o solo spazi
+    - rimuove righe di commento frequenti (approccio best-effort)
+    - strip spazi per riga
+    Non cambia il case.
     """
     if text is None:
         return ""
 
     testo = text.replace("\r\n", "\n").replace("\r", "\n")
     righe = testo.split("\n")
+
     righe_pulite = []
-
-    indice = 0
-    while indice < len(righe):
-        riga = righe[indice].strip()
-        if riga == "":
-            indice = indice + 1
+    i = 0
+    while i < len(righe):
+        r = righe[i].strip()
+        if r == "":
+            i = i + 1
             continue
 
-        # Filtri basilari per righe di commento più frequenti
-        if riga.startswith("//"):
-            indice = indice + 1
+        if r.startswith("//"):
+            i = i + 1
             continue
-        if riga.startswith("#"):
-            indice = indice + 1
+        if r.startswith("#"):
+            i = i + 1
             continue
-        if riga.startswith("/*"):
-            indice = indice + 1
+        if r.startswith("/*"):
+            i = i + 1
             continue
-        if riga.startswith("*"):
-            indice = indice + 1
+        if r.startswith("*"):
+            i = i + 1
             continue
-        if riga.startswith("*/"):
-            indice = indice + 1
+        if r.startswith("*/"):
+            i = i + 1
             continue
 
-        righe_pulite.append(riga)
-        indice = indice + 1
+        righe_pulite.append(r)
+        i = i + 1
 
     return "\n".join(righe_pulite)
 
 
-def _text_to_line_set(text, min_len=4):
+def _text_to_line_set(text, min_len):
     """
     Converte un testo normalizzato in set di righe significative (len >= min_len).
-    Utile per stimare riuso tramite intersezione (stile Jaccard).
     """
     insieme = set()
-
     if text is None:
         return insieme
 
@@ -135,142 +141,193 @@ def _text_to_line_set(text, min_len=4):
 
 def read_text_from_directory(directory_path, allowed_extensions):
     """
-    Legge ricorsivamente i file in 'directory_path' filtrando per 'allowed_extensions'
-    (es. ('.php', '.html', '.css', '.js', '.txt')) e concatena i contenuti.
-    Restituisce testo normalizzato (stringa).
+    Legge ricorsivamente i file ammessi in 'directory_path' e concatena i contenuti
+    in un'unica stringa normalizzata (senza salvare su disco).
     """
-    if not directory_path:
-        return ""
-
-    if not os.path.isdir(directory_path):
+    if not directory_path or not os.path.isdir(directory_path):
         return ""
 
     blocchi = []
-
     for radice, _, files in os.walk(directory_path):
-        for nome in files:
+        j = 0
+        while j < len(files):
+            nome = files[j]
             nome_lower = nome.lower()
 
             estensione_valida = False
-            idx = 0
-            while idx < len(allowed_extensions):
-                est = allowed_extensions[idx]
+            k = 0
+            while k < len(allowed_extensions):
+                est = allowed_extensions[k]
                 if nome_lower.endswith(est):
                     estensione_valida = True
                     break
-                idx = idx + 1
+                k = k + 1
 
-            if not estensione_valida:
-                continue
-
-            percorso = os.path.join(radice, nome)
-            contenuto = _safe_read_text(percorso)
-            if contenuto is None:
-                contenuto = ""
-
-            if contenuto != "":
-                blocchi.append("FILE: " + nome + "\n" + contenuto + "\n")
+            if estensione_valida:
+                percorso = os.path.join(radice, nome)
+                contenuto = _safe_read_text(percorso)
+                if contenuto is None:
+                    contenuto = ""
+                if contenuto != "":
+                    blocchi.append("FILE: " + os.path.relpath(percorso, directory_path) + "\n" + contenuto + "\n")
+            j = j + 1
 
     testo = "\n".join(blocchi)
     return _normalize_text_for_code(testo)
 
 
 # ======================================================================
-# METRICHE DI RIUSO VERIFICA ↔ DOMINIO PERSONALE
+# MERGE PER DOMINIO (scrive "__MERGED__.txt" e restituisce i testi)
 # ======================================================================
+
+def _write_text(path, text):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        try:
+            with open(path, "w", encoding="latin-1", errors="ignore") as f:
+                f.write(text)
+        except Exception:
+            pass
+
+
+def generate_domain_merges(domini_dirs, allowed_extensions):
+    """
+    Per ogni voce di 'domini_dirs' (dict {studente: path_dom}),
+    crea un file '__MERGED__.txt' all'interno della cartella del dominio
+    che contiene la concatenazione dei file ammessi (normalizzati).
+
+    Ritorna:
+        - merged_texts_by_student: dict {studente: testo_merged_normalized}
+        - merged_paths_by_student: dict {studente: percorso_file_merged}
+    """
+    merged_texts_by_student = {}
+    merged_paths_by_student = {}
+
+    nomi = sorted(list(domini_dirs.keys()))
+    i = 0
+    while i < len(nomi):
+        stud = nomi[i]
+        dom_dir = domini_dirs.get(stud)
+        if dom_dir and os.path.isdir(dom_dir):
+            testo_merged = read_text_from_directory(dom_dir, allowed_extensions)
+            merged_texts_by_student[stud] = testo_merged
+
+            merged_path = os.path.join(dom_dir, "__MERGED__.txt")
+            _write_text(merged_path, testo_merged)
+            merged_paths_by_student[stud] = merged_path
+        i = i + 1
+
+    return merged_texts_by_student, merged_paths_by_student
+
+
+# ======================================================================
+# METRICHE DI CONFRONTO: VERIFICA vs MERGE DEL DOMINIO
+# ======================================================================
+
+def _sum_matching_block_chars(a_text, b_text, min_block_chars):
+    """
+    Usa difflib.SequenceMatcher per ottenere i blocchi coincidenti
+    e somma la lunghezza dei blocchi con size >= min_block_chars.
+    """
+    if not a_text or not b_text:
+        return 0
+
+    matcher = difflib.SequenceMatcher(None, a_text, b_text)
+    blocks = matcher.get_matching_blocks()
+
+    totale = 0
+    i = 0
+    while i < len(blocks):
+        size = blocks[i].size
+        if size >= int(min_block_chars):
+            totale = totale + int(size)
+        i = i + 1
+
+    return totale
+
 
 def calculate_text_similarity_percent(text1, text2):
     """
-    Similarità globale (0-100) con difflib su stringhe.
+    Similarità globale (0-100) con difflib.
     """
     if not text1 and not text2:
         return 100.0
-
     if not text1 or not text2:
         return 0.0
-
     matcher = difflib.SequenceMatcher(None, text1, text2)
     ratio = matcher.ratio()
     return ratio * 100.0
 
 
-def compute_reuse_metrics(test_text, domain_text):
+def compute_merge_metrics(test_text, merged_domain_text, min_line_len=4, min_block_chars=8):
     """
-    Calcola metriche di riuso tra:
-    - test_text  (verifica locale)
-    - domain_text (contenuto del dominio personale)
-
+    Confronta il testo della VERIFICA con il MERGE del DOMINIO.
     Restituisce un dizionario con:
-    - similarity_percent (difflib, 0-100)
-    - total_lines_test
-    - total_lines_domain
-    - shared_lines_count
-    - percent_reuse_from_domain_on_test  = shared_lines_count / total_lines_test   * 100
-    - percent_overlap_on_domain          = shared_lines_count / total_lines_domain * 100
+        - similarity_percent
+        - shared_lines_count
+        - shared_chars_len
+        - percent_shared_chars_on_test
+        - total_lines_test
+        - total_chars_test
     """
     risultato = {}
 
     testo_test = test_text if test_text is not None else ""
-    testo_dom = domain_text if domain_text is not None else ""
+    testo_dom = merged_domain_text if merged_domain_text is not None else ""
 
-    # Similarità globale
+    # similarità globale
     similarity_percent = calculate_text_similarity_percent(testo_test, testo_dom)
 
-    # Stima riuso a righe significative
-    set_test = _text_to_line_set(testo_test, min_len=4)
-    set_dom = _text_to_line_set(testo_dom, min_len=4)
+    # linee significative condivise
+    set_test = _text_to_line_set(testo_test, min_line_len)
+    set_dom = _text_to_line_set(testo_dom, min_line_len)
+    shared_lines = 0
+    if len(set_test) > 0 and len(set_dom) > 0:
+        shared_lines = len(set_test.intersection(set_dom))
 
-    total_test = len(set_test)
-    total_dom = len(set_dom)
+    # blocchi identici (caratteri) con lunghezza minima
+    shared_chars_len = _sum_matching_block_chars(testo_test, testo_dom, min_block_chars)
 
-    shared = 0
-    if total_test > 0 and total_dom > 0:
-        shared = len(set_test.intersection(set_dom))
-    elif total_test == 0 or total_dom == 0:
-        shared = 0
-
-    reuse_on_test = 0.0
-    if total_test > 0:
-        reuse_on_test = (shared * 100.0) / float(total_test)
-
-    overlap_on_domain = 0.0
-    if total_dom > 0:
-        overlap_on_domain = (shared * 100.0) / float(total_dom)
+    total_chars_test = len(testo_test)
+    percent_shared_chars = 0.0
+    if total_chars_test > 0:
+        percent_shared_chars = (shared_chars_len * 100.0) / float(total_chars_test)
 
     risultato["similarity_percent"] = similarity_percent
-    risultato["total_lines_test"] = total_test
-    risultato["total_lines_domain"] = total_dom
-    risultato["shared_lines_count"] = shared
-    risultato["percent_reuse_from_domain_on_test"] = reuse_on_test
-    risultato["percent_overlap_on_domain"] = overlap_on_domain
+    risultato["shared_lines_count"] = shared_lines
+    risultato["shared_chars_len"] = shared_chars_len
+    risultato["percent_shared_chars_on_test"] = percent_shared_chars
+    risultato["total_lines_test"] = len(set_test)
+    risultato["total_chars_test"] = total_chars_test
 
     return risultato
 
 
+# ======================================================================
+# PIPELINE PRINCIPALE PER LA FRAME DOMINI
+# ======================================================================
+
 def analyze_reuse_by_student(tests_dirs, domini_dirs, allowed_extensions):
     """
-    Per ciascun studente con verifica e dominio disponibili:
-    - legge e normalizza i testi dalle directory
-    - calcola le metriche di riuso (compute_reuse_metrics)
-    - prepara dizionari utili per matrici e heatmap
+    1) Costruisce i testi delle verifiche (normalizzati).
+    2) Genera i MERGE per ogni dominio (scrive '__MERGED__.txt').
+    3) Calcola le metriche VERIFICA vs MERGE DOMINIO per gli studenti presenti in entrambi.
+    4) Restituisce anche i testi per eventuali matrici/heatmap:
 
-    Parametri:
-    - tests_dirs:   dict {studente: path_cartella_verifica}
-    - domini_dirs:  dict {studente: path_cartella_dominio}
-    - allowed_extensions: tuple/list di estensioni da includere
-
-    Ritorna:
-    - metrics_by_student: dict {studente: metriche}
-    - students_in_test:   lista studenti con testo verifica valido
-    - students_in_domain: lista studenti con testo dominio valido
-    - texts_test:         dict {studente: testo_verifica}
-    - texts_domain:       dict {studente: testo_dominio}
+       Ritorna:
+         - metrics_by_student: dict {studente: metriche}
+         - students_in_test:   lista studenti con test valido
+         - students_in_domain: lista studenti con MERGE dominio valido
+         - texts_test:         dict {studente: testo_verifica_norm}
+         - merged_domain_texts: dict {studente: testo_merge_norm}
     """
-    metrics_by_student = {}
     texts_test = {}
-    texts_domain = {}
+    merged_domain_texts = {}
+    metrics_by_student = {}
 
-    # Verifiche
+    # 1) Verifiche
     nomi_test = sorted(list(tests_dirs.keys()))
     i = 0
     while i < len(nomi_test):
@@ -281,140 +338,115 @@ def analyze_reuse_by_student(tests_dirs, domini_dirs, allowed_extensions):
             texts_test[nome] = testo
         i = i + 1
 
-    # Domini
-    nomi_dom = sorted(list(domini_dirs.keys()))
-    j = 0
-    while j < len(nomi_dom):
-        nome = nomi_dom[j]
-        d = domini_dirs.get(nome)
-        testo = read_text_from_directory(d, allowed_extensions)
-        if testo.strip() != "":
-            texts_domain[nome] = testo
-        j = j + 1
+    # 2) Merge domini (+ scrittura file)
+    merged_domain_texts, _merged_paths = generate_domain_merges(domini_dirs, allowed_extensions)
 
-    # Intersezione studenti con entrambi i testi
-    studenti = sorted(list(set(texts_test.keys()).intersection(set(texts_domain.keys()))))
-
-    k = 0
-    while k < len(studenti):
-        nome = studenti[k]
-        met = compute_reuse_metrics(texts_test.get(nome, ""), texts_domain.get(nome, ""))
-        metrics_by_student[nome] = met
-        k = k + 1
+    # 3) Metriche per intersezione studenti
+    studenti = sorted(list(set(texts_test.keys()).intersection(set(merged_domain_texts.keys()))))
+    i = 0
+    while i < len(studenti):
+        nome = studenti[i]
+        m = compute_merge_metrics(texts_test.get(nome, ""), merged_domain_texts.get(nome, ""))
+        metrics_by_student[nome] = m
+        i = i + 1
 
     students_in_test = sorted(list(texts_test.keys()))
-    students_in_domain = sorted(list(texts_domain.keys()))
+    students_in_domain = sorted(list(merged_domain_texts.keys()))
 
-    return metrics_by_student, students_in_test, students_in_domain, texts_test, texts_domain
+    return metrics_by_student, students_in_test, students_in_domain, texts_test, merged_domain_texts
 
 
 # ======================================================================
-# MATRICI DI SIMILARITÀ E HEATMAP
+# MATRICI DI SIMILARITÀ E HEATMAP (stile coerente con similarity.py)
 # ======================================================================
 
 def build_similarity_matrix(student_names, texts_by_student):
     """
-    Matrice NxN tra testi di 'student_names' usando 'texts_by_student'.
+    Matrice NxN tra i testi indicati.
     """
-    dimensione = len(student_names)
+    n = len(student_names)
     matrice = []
 
-    riga_indice = 0
-    while riga_indice < dimensione:
-        riga = []
-        colonna_indice = 0
-        while colonna_indice < dimensione:
-            nome_i = student_names[riga_indice]
-            nome_j = student_names[colonna_indice]
-
-            testo_i = texts_by_student.get(nome_i, "")
-            testo_j = texts_by_student.get(nome_j, "")
-
-            valore = calculate_text_similarity_percent(testo_i, testo_j)
-            riga.append(valore)
-
-            colonna_indice = colonna_indice + 1
-        matrice.append(riga)
-        riga_indice = riga_indice + 1
+    r = 0
+    while r < n:
+        row = []
+        c = 0
+        while c < n:
+            nome_i = student_names[r]
+            nome_j = student_names[c]
+            t_i = texts_by_student.get(nome_i, "")
+            t_j = texts_by_student.get(nome_j, "")
+            val = calculate_text_similarity_percent(t_i, t_j)
+            row.append(val)
+            c = c + 1
+        matrice.append(row)
+        r = r + 1
 
     return matrice
 
 
 def build_cross_similarity_matrix(row_names, col_names, row_texts, col_texts):
     """
-    Matrice len(row_names) x len(col_names) tra insiemi diversi (es. verifiche vs domini).
+    Matrice len(row_names) x len(col_names) tra due insiemi (es. verifiche vs MERGE domini).
     """
-    num_righe = len(row_names)
-    num_colonne = len(col_names)
+    nr = len(row_names)
+    nc = len(col_names)
     matrice = []
 
-    riga_indice = 0
-    while riga_indice < num_righe:
-        riga = []
-        colonna_indice = 0
-        while colonna_indice < num_colonne:
-            nome_riga = row_names[riga_indice]
-            nome_colonna = col_names[colonna_indice]
-
-            testo_riga = row_texts.get(nome_riga, "")
-            testo_colonna = col_texts.get(nome_colonna, "")
-
-            valore = calculate_text_similarity_percent(testo_riga, testo_colonna)
-            riga.append(valore)
-
-            colonna_indice = colonna_indice + 1
-        matrice.append(riga)
-        riga_indice = riga_indice + 1
+    r = 0
+    while r < nr:
+        row = []
+        c = 0
+        while c < nc:
+            nome_r = row_names[r]
+            nome_c = col_names[c]
+            t_r = row_texts.get(nome_r, "")
+            t_c = col_texts.get(nome_c, "")
+            val = calculate_text_similarity_percent(t_r, t_c)
+            row.append(val)
+            c = c + 1
+        matrice.append(row)
+        r = r + 1
 
     return matrice
 
 
 def show_heatmap(parent, titolo, row_labels, col_labels, matrix):
     """
-    Visualizza una heatmap in una nuova finestra Tkinter.
-    Coerenza estetica con similarity.py: usa imshow e colorbar standard.
+    Visualizza una heatmap in una nuova finestra Tkinter, stile coerente con similarity.py.
     """
     if not HAS_MATPLOTLIB:
-        messagebox.showerror(
-            "Errore",
-            "Matplotlib non è disponibile. Installalo per visualizzare la mappa delle similitudini."
-        )
+        messagebox.showerror("Errore", "Matplotlib non è disponibile. Installalo per visualizzare la mappa delle similitudini.")
         return
 
     if not row_labels or not col_labels:
-        messagebox.showwarning(
-            "Attenzione",
-            "Dati insufficienti per costruire la mappa delle similitudini."
-        )
+        messagebox.showwarning("Attenzione", "Dati insufficienti per costruire la mappa delle similitudini.")
         return
 
-    # Conversione numerica difensiva
-    dati_numerici = []
+    # conversione difensiva a float
+    numerica = []
     r = 0
     while r < len(matrix):
-        riga = matrix[r]
-        nuova_riga = []
+        src_row = matrix[r]
+        dst_row = []
         c = 0
-        while c < len(riga):
+        while c < len(src_row):
             try:
-                valore = float(riga[c])
+                v = float(src_row[c])
             except Exception:
-                valore = 0.0
-            nuova_riga.append(valore)
+                v = 0.0
+            dst_row.append(v)
             c = c + 1
-        dati_numerici.append(nuova_riga)
+        numerica.append(dst_row)
         r = r + 1
 
     top = Toplevel(parent)
     top.title(titolo)
 
-    larghezza = 8.0
-    altezza = 6.0
-    fig, ax = plt.subplots(figsize=(larghezza, altezza))
-
-    cax = ax.imshow(dati_numerici, interpolation="nearest", cmap="viridis", vmin=0.0, vmax=100.0)
-    barra = fig.colorbar(cax)
-    barra.set_label("Similarità (%)")
+    fig, ax = plt.subplots(figsize=(8.0, 6.0))
+    cax = ax.imshow(numerica, interpolation="nearest", cmap="viridis", vmin=0.0, vmax=100.0)
+    cb = fig.colorbar(cax)
+    cb.set_label("Similarità (%)")
 
     ax.set_xticks(range(len(col_labels)))
     ax.set_yticks(range(len(row_labels)))
@@ -429,10 +461,9 @@ def show_heatmap(parent, titolo, row_labels, col_labels, matrix):
 
     canvas = FigureCanvasTkAgg(fig, master=top)
     canvas.draw()
-
     widget = canvas.get_tk_widget()
     widget.pack(fill="both", expand=True)
 
-    # Conserva riferimenti per evitare GC
+    # conserva riferimenti (evita GC)
     top._figure = fig
     top._canvas = canvas
