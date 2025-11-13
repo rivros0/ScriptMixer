@@ -345,6 +345,10 @@ def create_individual_pdfs(directory_source, report_text) -> None:
     created_count = 0
 
     for file_name in sorted(os.listdir(mix_output_directory)):
+        # ignora tutto ciò che inizia con '00'
+        if file_name.startswith("00"):
+            continue
+        # considera solo i mix
         if not file_name.endswith("_mix.txt"):
             continue
 
@@ -415,7 +419,7 @@ def merge_all_files(directory_source, report_text) -> None:
     - Legge tutti i PDF da 00_Pdf (eccetto il finale stesso).
     - Per ogni elaborato garantisce un numero PARI di pagine
       (se dispari, aggiunge una pagina bianca).
-    - Salva il PDF finale in 00_Pdf come 00_MEGAmerged_output_final.pdf.
+    - Salva il PDF finale in 00_Pdf come _ELABORATI.pdf.
     """
     base_directory = _resolve_base_directory(directory_source)
 
@@ -435,7 +439,7 @@ def merge_all_files(directory_source, report_text) -> None:
 
     final_pdf_path = os.path.join(
         pdf_output_directory,
-        "00_MEGAmerged_output_final.pdf",
+        "_ELABORATI.pdf",
     )
 
     pdf_files = []
@@ -443,10 +447,13 @@ def merge_all_files(directory_source, report_text) -> None:
     for file_name in sorted(os.listdir(pdf_output_directory)):
         if not file_name.lower().endswith(".pdf"):
             continue
-        if file_name.startswith("00_MEGAmerged_output_final"):
-            continue
+            # ignora qualunque PDF che inizi con '00'
+        if file_name.startswith("00"):
+            # oltre al finale, esclude anche eventuali PDF di servizio
+             continue
+    pdf_files.append(os.path.join(pdf_output_directory, file_name))
 
-        pdf_files.append(os.path.join(pdf_output_directory, file_name))
+        
 
     if not pdf_files:
         report_text.insert(
