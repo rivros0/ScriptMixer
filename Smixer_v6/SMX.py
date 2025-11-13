@@ -335,7 +335,7 @@ mode_menu.add_radiobutton(
     value="Export",
     command=set_mode_export
 )
-menubar.add_cascade(label="Modalità", menu=mode_menu)
+menubar.add_cascade(label="    Modalità", menu=mode_menu)
 
 
 # --- Etichetta stato modalità in grassetto, subito dopo "Modalità"
@@ -367,7 +367,7 @@ def _on_mode_change(*_args):
     if _mode_status_index is not None:
         menubar.entryconfig(
             _mode_status_index,
-            label="Modalità: " + current_mode.get()
+            label="Modalità corrente: " + current_mode.get()
         )
 
 
