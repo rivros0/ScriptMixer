@@ -367,7 +367,7 @@ def _on_mode_change(*_args):
     if _mode_status_index is not None:
         menubar.entryconfig(
             _mode_status_index,
-            label="Modalità corrente: " + current_mode.get()
+            label="Modalità: " + current_mode.get()
         )
 
 
