@@ -19,7 +19,7 @@ from frame_associa import open_associa_window
 # =========================
 
 root = tk.Tk()
-root.title("SMX / Gestione Elaborati")
+root.title("SMX V085 / Gestione Elaborati")
 root.geometry("1280x800")
 
 # Icona (se presente)
@@ -440,9 +440,8 @@ def on_directory_click(event):
         data_handler.open_selected_directory(path)
 
 
-# N.B.: nella versione originale il binding era una stringa vuota.
-# Manteniamo il comportamento, anche se non genera un click reale.
-lbl_directory.bind("", on_directory_click)
+# Binding corretto del click sinistro sul label directory
+lbl_directory.bind("<Button-1>", on_directory_click)
 
 
 def refresh_current_directory():

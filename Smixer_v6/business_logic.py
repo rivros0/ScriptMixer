@@ -442,7 +442,7 @@ def create_individual_pdfs(base_directory, report_text):
 # =============================================================================
 
 
-def merge_all_files(base_directory, report_text):
+def merge_all_files(base_directory, report_text,  verifica_name=None):
     """
     Esegue il merge di tutti i PDF presenti in 00_Pdf in un unico file:
 
@@ -553,11 +553,23 @@ def merge_all_files(base_directory, report_text):
 
         report_text.see("end")
 
-    final_pdf_path = os.path.join(
-        pdf_output_directory,
-        "00_MEGAmerged_output_final.pdf",
-    )
+    
+    
+    # nome verifica pulito
+    safe_verifica = ""
+    if verifica_name:
+        safe_verifica = str(verifica_name).strip()
+        for bad in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
+            safe_verifica = safe_verifica.replace(bad, "_")
 
+    if safe_verifica:
+        final_name = f"00_MEGAmerged_{safe_verifica}_ELABORATI.pdf"
+    else:
+        final_name = "00_MEGAmerged_output_ELABORATI.pdf"
+
+    final_pdf_path = os.path.join(pdf_output_directory, final_name)
+
+    ###
     try:
         with open(final_pdf_path, "wb") as f_out:
             writer.write(f_out)
