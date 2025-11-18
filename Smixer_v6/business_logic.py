@@ -10,19 +10,41 @@ from PyPDF2 import PdfReader, PdfWriter
 
 
 # =============================================================================
+#  COSTANTI GLOBALI PER I FILE DI MIX
+# =============================================================================
+
+FLAG_END_INTRO = "###__END_INTRO__###"
+
+
+# =============================================================================
 #  FUNZIONI DI SUPPORTO
 # =============================================================================
 
 
-def _normalize_text(content):
+def _extract_directory(lbl_or_var_directory):
     """
-    Normalizza il testo rimuovendo caratteri che possono creare problemi nei PDF:
-    - sostituisce TAB con 4 spazi;
-    - sostituisce spazio non-breakable (\u00a0) con spazio normale.
+    Estrae il percorso stringa dalla label o dalla StringVar.
+    Restituisce sempre una stringa (eventualmente vuota).
     """
-    if content is None:
+    if lbl_or_var_directory is None:
         return ""
-    text = str(content)
+    # Può essere una Label (con .cget) o una StringVar (con .get)
+    if hasattr(lbl_or_var_directory, "cget"):
+        return str(lbl_or_var_directory.cget("text")).strip()
+    if hasattr(lbl_or_var_directory, "get"):
+        return str(lbl_or_var_directory.get()).strip()
+    return str(lbl_or_var_directory).strip()
+
+
+def _normalize_text(text):
+    """
+    Normalizza il testo per evitare problemi di encoding e a capo.
+    """
+    if text is None:
+        return ""
+    text = str(text)
+    text = text.replace("\r\n", "\n")
+    text = text.replace("\r", "\n")
     text = text.replace("\t", "    ")
     text = text.replace("\u00a0", " ")
     return text
@@ -53,8 +75,12 @@ def _parse_extensions(ext_value):
         joined = str(ext_value)
 
     separators = [",", ";"]
-    for sep in separators:
+    i = 0
+    while i < len(separators):
+        sep = separators[i]
         joined = joined.replace(sep, " ")
+        i = i + 1
+
     parts = joined.split()
 
     extensions = []
@@ -67,42 +93,7 @@ def _parse_extensions(ext_value):
             extensions.append(part.lower())
         i = i + 1
 
-    # Se l'utente ha lasciato vuoto, per sicurezza ritorna lista vuota
     return extensions
-
-
-def _extract_directory(arg):
-    """
-    Prova a ricavare una path di directory da vari tipi di argomento:
-    - StringVar → usa .get()
-    - Label     → usa .cget("text") ed estrae la parte dopo i due punti, se presenti
-    - stringa   → usa direttamente il valore
-    """
-    if arg is None:
-        return ""
-
-    # StringVar o oggetto con .get()
-    if hasattr(arg, "get"):
-        try:
-            value = arg.get()
-        except Exception:
-            value = str(arg)
-        return str(value).strip()
-
-    # Label o simili con .cget("text")
-    if hasattr(arg, "cget"):
-        try:
-            text = arg.cget("text")
-        except Exception:
-            text = str(arg)
-        text = str(text)
-        if ":" in text:
-            pieces = text.split(":", 1)
-            text = pieces[1]
-        return text.strip()
-
-    # Fallback: lo tratto come stringa
-    return str(arg).strip()
 
 
 def wrap_preserve_indent(text, width):
@@ -134,6 +125,62 @@ def wrap_preserve_indent(text, width):
     return "\n".join(wrapped_lines)
 
 
+def estrai_contenuto_per_pdf_da_mix(mix_text):
+    """
+    Restituisce la parte di testo di un file di mix che deve essere
+    inclusa nel PDF finale.
+
+    Logica:
+      - se trova una riga che corrisponde esattamente a FLAG_END_INTRO
+        (ignorando spazi all'inizio e alla fine), restituisce tutto ciò
+        che viene DOPO quella riga;
+      - se la flag non è presente, restituisce il testo originale
+        (retrocompatibilità con vecchi file di mix).
+
+    In questo modo l'introduzione (intro di correzione, eventuali
+    commenti sui dominii, note, ecc.) può essere scritta prima della
+    flag e NON verrà inclusa nel PDF, mentre il corpo conterrà il nome
+    della subdirectory (es. test01) e tutti i file della verifica, che
+    verranno preservati nel PDF.
+    """
+    if mix_text is None:
+        return ""
+
+    text = str(mix_text)
+
+    if "\r\n" in text:
+        separator = "\r\n"
+        lines = text.split("\r\n")
+    else:
+        separator = "\n"
+        lines = text.split("\n")
+
+    start_index = 0
+    index = 0
+    found_flag = False
+
+    while index < len(lines):
+        current_line = lines[index]
+        if current_line.strip() == FLAG_END_INTRO:
+            found_flag = True
+            start_index = index + 1
+            break
+        index = index + 1
+
+    if not found_flag:
+        return text
+
+    body_lines = []
+    index = start_index
+    while index < len(lines):
+        body_lines.append(lines[index])
+        index = index + 1
+
+    body_text = separator.join(body_lines)
+
+    return body_text.lstrip("\r\n")
+
+
 # =============================================================================
 #  CREAZIONE FILE MIX
 # =============================================================================
@@ -147,15 +194,16 @@ def mix_files(lbl_or_var_directory,
               include_prompt,
               include_subdir):
     """
-    Funzione di alto livello richiamata dalla scheda Correzione.
+    Funzione principale richiamata dalla scheda di Correzione per creare
+    tutti i file di mix all'interno della directory 00_MixOutput.
 
-    Parametri attesi (compatibile con versioni precedenti):
-      - lbl_or_var_directory : Label, StringVar o stringa con la directory di lavoro
-      - entry_prompt         : Text widget con il prompt
-      - entry_extension      : Entry con estensioni (una o più)
-      - tree                 : Treeview con elenco subdirectory test
-      - report_text          : Text widget per log
-      - include_prompt       : bool, include o meno il prompt nel mix
+    Parametri:
+      - lbl_or_var_directory : Label o StringVar con la directory selezionata
+      - entry_prompt         : widget Text contenente il prompt/intro
+      - entry_extension      : widget Entry con le estensioni
+      - tree                 : Treeview con elenco subdirectory (testXX)
+      - report_text          : widget Text per il log
+      - include_prompt       : bool, include o meno l'intro nel mix
       - include_subdir       : bool, include o meno il nome della subdir nel mix
     """
     base_dir = _extract_directory(lbl_or_var_directory)
@@ -171,22 +219,28 @@ def mix_files(lbl_or_var_directory,
 
     prompt_string = entry_prompt.get("1.0", "end").strip()
     extensions_text = entry_extension.get()
-    extensions = _parse_extensions(extensions_text)
 
-    if len(extensions) == 0:
+    if extensions_text.strip() == "":
         messagebox.showwarning(
             "Attenzione",
-            "Specifica almeno una estensione file (es: .php .html .css)."
+            "Specificare almeno una estensione per i file da mixare."
         )
         return
 
-    output_directory = os.path.join(base_dir, "00_MixOutput")
-    os.makedirs(output_directory, exist_ok=True)
+    extensions = _parse_extensions(extensions_text)
 
-    # Svuota il log
+    output_directory = os.path.join(base_dir, "00_MixOutput")
+    try:
+        os.makedirs(output_directory, exist_ok=True)
+    except Exception as exc:
+        messagebox.showerror(
+            "Errore",
+            "Impossibile creare la directory 00_MixOutput:\n" + str(exc)
+        )
+        return
+
     report_text.insert("end", "Inizio creazione dei file di mix...\n")
 
-    # Per ogni riga della tabella (subdirectory testXX)
     items = tree.get_children()
     idx = 0
     while idx < len(items):
@@ -284,9 +338,25 @@ def create_mix_file(base_directory,
             return message, None
 
         with open(mix_file_path, "w", encoding="utf-8") as mix_file:
+            # -------------------------------------------------------------
+            # INTRO: solo prompt (se richiesto)
+            # Questa parte non verrà inclusa nel PDF, perché si trova
+            # prima della flag FLAG_END_INTRO.
+            # -------------------------------------------------------------
             if include_prompt and prompt_string:
-                mix_file.write(_normalize_text(prompt_string) + "\n")
+                intro_text = _normalize_text(prompt_string)
+                mix_file.write(intro_text + "\n")
 
+            # -------------------------------------------------------------
+            # FLAG DI FINE INTRO
+            # Tutto ciò che si trova sopra questa riga potrà essere
+            # scartato in fase di creazione del PDF.
+            # -------------------------------------------------------------
+            mix_file.write(FLAG_END_INTRO + "\n\n")
+
+            # -------------------------------------------------------------
+            # DA QUI IN POI IL CONTENUTO VIENE PRESERVATO NEL PDF
+            # -------------------------------------------------------------
             if include_subdir:
                 mix_file.write(subdir + "\n\n")
 
@@ -405,7 +475,8 @@ def create_individual_pdfs(base_directory, report_text):
                 content = f.read()
 
         content = _normalize_text(content)
-        wrapped = wrap_preserve_indent(content, max_char_width)
+        content_for_pdf = estrai_contenuto_per_pdf_da_mix(content)
+        wrapped = wrap_preserve_indent(content_for_pdf, max_char_width)
 
         pdf_name = os.path.splitext(file_name)[0] + ".pdf"
         pdf_path = os.path.join(pdf_output_directory, pdf_name)
@@ -471,50 +542,32 @@ def merge_all_files(base_directory, report_text,  verifica_name=None):
         )
         return
 
-    names = sorted(os.listdir(pdf_output_directory))
-    pdf_files = []
-
-    i = 0
-    while i < len(names):
-        file_name = names[i]
-        i = i + 1
-
-        if not file_name.lower().endswith(".pdf"):
-            continue
-        if file_name.startswith("00"):
-            # esclude PDF di servizio e merge finali
-            continue
-
-        pdf_files.append(os.path.join(pdf_output_directory, file_name))
-
-    if len(pdf_files) == 0:
-        messagebox.showwarning(
-            "Attenzione",
-            "Nessun PDF individuale trovato in 00_Pdf per il MEGAmerge."
-        )
-        return
-
-    writer = PdfWriter()
-    report_text.insert(
-        "end",
-        "Inizio MEGAmerge con pagine pari per ogni elaborato...\n",
-    )
+    report_text.insert("end", "Inizio MEGAmerge dei PDF...\n")
     report_text.see("end")
 
-    idx = 0
-    while idx < len(pdf_files):
-        path = pdf_files[idx]
-        name = os.path.basename(path)
-        idx = idx + 1
+    pdf_files = sorted(os.listdir(pdf_output_directory))
+    writer = PdfWriter()
 
+    i = 0
+    while i < len(pdf_files):
+        pdf_name = pdf_files[i]
+        i = i + 1
+
+        if pdf_name.startswith("00"):
+            continue
+
+        if not pdf_name.lower().endswith(".pdf"):
+            continue
+
+        pdf_path = os.path.join(pdf_output_directory, pdf_name)
         try:
-            reader = PdfReader(path)
+            reader = PdfReader(pdf_path)
         except Exception as exc:
             report_text.insert(
                 "end",
-                "Errore lettura PDF '"
-                + name
-                + "': "
+                "Errore nella lettura del PDF "
+                + pdf_name
+                + ": "
                 + str(exc)
                 + "\n",
             )
@@ -522,57 +575,27 @@ def merge_all_files(base_directory, report_text,  verifica_name=None):
             continue
 
         num_pages = len(reader.pages)
+        j = 0
+        while j < num_pages:
+            page = reader.pages[j]
+            writer.add_page(page)
+            j = j + 1
 
-        p = 0
-        while p < num_pages:
-            writer.add_page(reader.pages[p])
-            p = p + 1
+        if num_pages % 2 != 0:
+            blank_page = writer.add_blank_page()
+            blank_page.mediabox.upper_right = (A4[0], A4[1])
 
-        if num_pages % 2 != 0 and num_pages > 0:
-            first_page = reader.pages[0]
-            width = first_page.mediabox.width
-            height = first_page.mediabox.height
-            writer.add_blank_page(width=width, height=height)
-            report_text.insert(
-                "end",
-                name
-                + ": "
-                + str(num_pages)
-                + " pagine -> aggiunta 1 pagina bianca (totale blocco: "
-                + str(num_pages + 1)
-                + ").\n",
-            )
-        else:
-            report_text.insert(
-                "end",
-                name
-                + ": "
-                + str(num_pages)
-                + " pagine (già pari).\n",
-            )
-
-        report_text.see("end")
-
-    
-    
-    # nome verifica pulito
-    safe_verifica = ""
-    if verifica_name:
-        safe_verifica = str(verifica_name).strip()
-        for bad in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
-            safe_verifica = safe_verifica.replace(bad, "_")
-
-    if safe_verifica:
-        final_name = f"00_MEGAmerged_{safe_verifica}_ELABORATI.pdf"
+    if verifica_name is None or str(verifica_name).strip() == "":
+        final_pdf_name = "00_MEGAmerged_output_final.pdf"
     else:
-        final_name = "00_MEGAmerged_output_ELABORATI.pdf"
+        safe_name = str(verifica_name).strip()
+        final_pdf_name = "00_MEGAmerged_output_final_" + safe_name + ".pdf"
 
-    final_pdf_path = os.path.join(pdf_output_directory, final_name)
+    final_pdf_path = os.path.join(pdf_output_directory, final_pdf_name)
 
-    ###
     try:
-        with open(final_pdf_path, "wb") as f_out:
-            writer.write(f_out)
+        with open(final_pdf_path, "wb") as out_file:
+            writer.write(out_file)
         report_text.insert(
             "end",
             "MEGAmerge completato. File PDF finale creato:\n"

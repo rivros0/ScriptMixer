@@ -48,6 +48,8 @@ global_config = {
     # Riferimento al file CSV che contiene i dati di autenticazione / lista domini
     # verrà salvato e ricaricato nel file di configurazione JSON
     "domains_csv_path": tk.StringVar(),
+    "ftp_config_path": tk.StringVar(),
+
 
     # callback opzionali per pulsante "Aggiorna cartella"
     "refresh_preparazione": None,
