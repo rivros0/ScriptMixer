@@ -8,6 +8,8 @@ from tkinter import ttk, filedialog, messagebox
 
 import similarity_ftp
 import ftpAgent
+import sim_map_ftp
+
 
 YELLOW_BG = "#85187c"
 
@@ -168,7 +170,7 @@ def create_frame_domini(root, global_config):
       - Associa alunno → cartella test
       - Download FTP (ftpAgent) usando SOLO dati del CSV
       - Analisi somiglianze (similarity_ftp)
-      - Finestra riepilogo per tutti gli alunni
+      - Finestra riepilogo per tutti gli alunni (via sim_map_ftp)
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
@@ -678,173 +680,6 @@ def create_frame_domini(root, global_config):
 
         log("=== Analisi somiglianze completata ===")
 
-
-
-    # ==================================================================
-    # SEZIONE: MAPPA SIMILITUDINI
-    # ==================================================================
-    def mostra_mappa():
-        """
-        Mostra una finestra con la mappa delle similitudini dominio/verifica.
-
-        Colonne:
-          - Studente: identificativo usato per test e dominio.
-          - Simil. Test/Dominio (%): similarità globale tra il MIX della verifica
-            e il codice complessivo trovato sul dominio (0–100%).
-          - Righe riutilizzate: numero di righe "significative" in comune
-            (lunghezza minima 4 caratteri).
-          - Caratteri riutilizzati: numero totale di caratteri in blocchi comuni
-            (blocchi di almeno 8 caratteri consecutivi).
-          - % char su test: percentuale dei caratteri del TEST che risultano
-            "riutilizzati" nel dominio (0–100%).
-        """
-        if not metrics_by_student_cache:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessuna analisi disponibile.\nEsegui prima 'Analizza somiglianze'.",
-            )
-            return
-
-        top = tk.Toplevel(frame)
-        top.title("Mappa similitudini Test ↔ Dominio")
-
-        # ----------------------------
-        # Tabella Treeview
-        # ----------------------------
-        colonne_mappa = (
-            "Studente",
-            "Simil. Test/Dominio (%)",
-            "Righe riutilizzate",
-            "Caratteri riutilizzati",
-            "% char su test",
-        )
-
-        tree_mappa = ttk.Treeview(
-            top,
-            columns=colonne_mappa,
-            show="headings",
-            height=20
-        )
-
-        # Intestazioni e dimensioni colonne
-        indice = 0
-        while indice < len(colonne_mappa):
-            colonna = colonne_mappa[indice]
-            tree_mappa.heading(colonna, text=colonna)
-
-            if colonna == "Studente":
-                tree_mappa.column(colonna, width=220, anchor="w")
-            elif colonna == "Simil. Test/Dominio (%)":
-                tree_mappa.column(colonna, width=160, anchor="center")
-            elif colonna == "Righe riutilizzate":
-                tree_mappa.column(colonna, width=140, anchor="center")
-            elif colonna == "Caratteri riutilizzati":
-                tree_mappa.column(colonna, width=160, anchor="center")
-            else:
-                tree_mappa.column(colonna, width=140, anchor="center")
-
-            indice = indice + 1
-
-        tree_mappa.grid(row=0, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
-
-        scrollbar_vert = ttk.Scrollbar(top, orient="vertical", command=tree_mappa.yview)
-        tree_mappa.configure(yscrollcommand=scrollbar_vert.set)
-        scrollbar_vert.grid(row=0, column=3, sticky="ns", pady=10)
-
-        top.grid_rowconfigure(0, weight=1)
-        top.grid_columnconfigure(0, weight=1)
-
-        # ----------------------------
-        # Riempimento tabella
-        # ----------------------------
-        nomi_studenti = sorted(metrics_by_student_cache.keys())
-
-        indice = 0
-        while indice < len(nomi_studenti):
-            studente = nomi_studenti[indice]
-            metriche = metrics_by_student_cache[studente]
-
-            simil = float(metriche.get("similarity_percent", 0.0))
-            righe_comuni = int(metriche.get("shared_lines_count", 0))
-            chars_comuni = int(metriche.get("shared_chars_len", 0))
-            perc_chars_test = float(metriche.get("percent_shared_chars_on_test", 0.0))
-
-            tree_mappa.insert(
-                "",
-                "end",
-                values=(
-                    studente,
-                    "{:.1f}".format(simil),
-                    str(righe_comuni),
-                    str(chars_comuni),
-                    "{:.1f}".format(perc_chars_test),
-                ),
-            )
-
-            indice = indice + 1
-
-        # ----------------------------
-        # Legenda esplicativa
-        # ----------------------------
-        testo_legenda = (
-            "Legenda colonne:\n"
-            "• Simil. Test/Dominio (%): similarità globale tra MIX della verifica e codice sul dominio.\n"
-            "• Righe riutilizzate: numero di righe 'significative' in comune (lunghezza ≥ 4 caratteri).\n"
-            "• Caratteri riutilizzati: caratteri in blocchi comuni (blocchi consecutivi ≥ 8 caratteri).\n"
-            "• % char su test: quanto del TEST risulta riutilizzato sul dominio (0–100%)."
-        )
-
-        lbl_legenda = tk.Label(
-            top,
-            text=testo_legenda,
-            justify="left",
-            anchor="w",
-            bg=YELLOW_BG,
-            fg="white",
-            padx=8,
-            pady=6,
-        )
-        lbl_legenda.grid(row=1, column=0, columnspan=3, padx=10, pady=(0, 8), sticky="we")
-
-        # ----------------------------
-        # Pulsanti chiusura / heatmap
-        # ----------------------------
-        def chiudi_mappa():
-            top.destroy()
-
-        btn_chiudi = tk.Button(
-            top,
-            text="Chiudi",
-            command=chiudi_mappa
-        )
-        btn_chiudi.grid(row=2, column=0, padx=10, pady=8, sticky="w")
-
-        def apri_heatmap_globale():
-            """
-            Apre la heatmap globale (se disponibile) utilizzando i testi già
-            memorizzati nelle cache (tests e domini).
-            """
-            try:
-                similarity_ftp.show_heatmap(
-                    frame,
-                    "Heatmap Test ↔ Dominio",
-                    nomi_studenti,
-                    nomi_studenti,
-                    metrics_by_student_cache,
-                )
-            except Exception as errore:
-                messagebox.showerror(
-                    "Errore heatmap",
-                    "Impossibile mostrare la heatmap:\n{}".format(errore),
-                )
-
-        btn_heatmap = tk.Button(
-            top,
-            text="Heatmap globale",
-            command=apri_heatmap_globale
-        )
-        btn_heatmap.grid(row=2, column=1, padx=10, pady=8, sticky="w")
-
     # ==================================================================
     # BOTTONI PRINCIPALI
     # ==================================================================
@@ -877,7 +712,14 @@ def create_frame_domini(root, global_config):
         text="Mostra mappa similitudini",
         width=24,
         state="disabled",
-        command=mostra_mappa,
+        command=lambda: sim_map_ftp.open_similarity_map(
+            frame,
+            metrics_by_student_cache,
+            texts_test_cache,
+            merged_domain_texts_cache,
+            students_in_test_cache,
+            students_in_domain_cache,
+        ),
     )
     btn_mappa.grid(row=0, column=4, padx=6, pady=6, sticky="w")
 
