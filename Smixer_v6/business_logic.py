@@ -1,10 +1,12 @@
 import os
+import io
 import textwrap
 from tkinter import messagebox
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Preformatted
+from reportlab.pdfgen import canvas
 
 from PyPDF2 import PdfReader, PdfWriter
 
@@ -180,6 +182,49 @@ def estrai_contenuto_per_pdf_da_mix(mix_text):
 
     return body_text.lstrip("\r\n")
 
+def _add_header_to_page(page, header_text):
+    """
+    Aggiunge un'intestazione testuale (header_text) nella parte alta
+    della pagina PDF passata come argomento, SENZA aggiungere nuove pagine.
+
+    Utilizza un overlay generato con reportlab e lo fonde con la pagina
+    originale tramite PyPDF2.
+    """
+    if page is None:
+        return
+
+    try:
+        media_box = page.mediabox
+        width = float(media_box.width)
+        height = float(media_box.height)
+    except Exception:
+        width = A4[0]
+        height = A4[1]
+
+    buffer_stream = io.BytesIO()
+    c = canvas.Canvas(buffer_stream, pagesize=(width, height))
+
+    try:
+        c.setFont("Helvetica-Bold", 12)
+    except Exception:
+        c.setFont("Helvetica", 12)
+
+    margin_x = 40.0
+    margin_y = height - 30.0
+
+    testo = str(header_text)
+    c.drawString(margin_x, margin_y, testo)
+
+    c.save()
+    buffer_stream.seek(0)
+
+    try:
+        overlay_reader = PdfReader(buffer_stream)
+        overlay_page = overlay_reader.pages[0]
+        page.merge_page(overlay_page)
+    except Exception:
+        pass
+
 
 # =============================================================================
 #  CREAZIONE FILE MIX
@@ -304,6 +349,9 @@ def create_mix_file(base_directory,
     - Cerca ricorsivamente tutti i file con le estensioni indicate;
     - Ignora qualunque sottocartella che inizi con '00';
     - Scrive un file '<subdir>_mix.txt' nella directory 00_MixOutput.
+    - ESCLUDE SEMPRE i file PDF dal mix, anche se l'estensione '.pdf'
+      è presente in 'extensions', per evitare di scrivere contenuto
+      binario nel file di testo.
     """
     if not isinstance(extensions, list) and not isinstance(extensions, tuple):
         extensions = _parse_extensions(extensions)
@@ -338,9 +386,15 @@ def create_mix_file(base_directory,
             k = 0
             while k < len(files):
                 file_name = files[k]
-                lower_name = file_name.lower()
-                match = False
+                k = k + 1
 
+                lower_name = str(file_name).lower()
+
+                # ESCLUSIONE FORZATA DEI PDF DAL MIX DI TESTO
+                if lower_name.endswith(".pdf"):
+                    continue
+
+                match = False
                 m = 0
                 while m < len(normalized_exts):
                     ext = normalized_exts[m]
@@ -351,13 +405,12 @@ def create_mix_file(base_directory,
 
                 if match:
                     files_to_mix.append(os.path.join(root, file_name))
-                k = k + 1
 
         if len(files_to_mix) == 0:
             message = (
                 "Nessun file con estensioni "
                 + ", ".join(normalized_exts)
-                + " trovato nella subdirectory "
+                + " (esclusi i PDF) trovato nella subdirectory "
                 + subdir
                 + " (sottocartelle '00*' escluse). File di mix NON creato.\n"
             )
@@ -371,7 +424,7 @@ def create_mix_file(base_directory,
             # -------------------------------------------------------------
             if include_prompt and prompt_string:
                 intro_text = _normalize_text(prompt_string)
-                mix_file.write(intro_text + "\n")
+                mix_file.write(intro_text + "\n\n")
 
             # -------------------------------------------------------------
             # FLAG DI FINE INTRO
@@ -389,6 +442,8 @@ def create_mix_file(base_directory,
             z = 0
             while z < len(files_to_mix):
                 file_path = files_to_mix[z]
+                z = z + 1
+
                 try:
                     with open(file_path, "r", encoding="utf-8") as current_file:
                         content = current_file.read()
@@ -403,24 +458,67 @@ def create_mix_file(base_directory,
 
                 content = _normalize_text(content)
 
-                mix_file.write(
-                    "###############################################################\n\n"
-                )
-                mix_file.write(os.path.basename(file_path) + "\n" + content + "\n")
-                z = z + 1
+                # Separatore visivo tra i file, come nel tuo esempio
+                mix_file.write("###############################################################\n\n")
+                mix_file.write(os.path.basename(file_path) + "\n")
+                mix_file.write(content + "\n\n")
 
         message = (
-            "Mix completato per "
+            "File di mix creato per "
             + subdir
-            + ": file con estensioni "
-            + ", ".join(normalized_exts)
-            + " uniti con successo.\n"
+            + ": "
+            + mix_file_path
+            + "\n"
         )
         return message, mix_file_path
 
     except Exception as exc:
         message = "Errore durante il mix per " + subdir + ": " + str(exc) + "\n"
         return message, None
+
+def _add_header_to_page(page, header_text):
+    """
+    Aggiunge un'intestazione testuale (header_text) in alto alla pagina PDF
+    passata come argomento, SENZA aggiungere nuove pagine.
+
+    Usa un overlay generato con reportlab e lo fonde con la pagina
+    originale tramite PyPDF2.
+    """
+    if page is None:
+        return
+
+    try:
+        media_box = page.mediabox
+        width = float(media_box.width)
+        height = float(media_box.height)
+    except Exception:
+        width = A4[0]
+        height = A4[1]
+
+    buffer_stream = io.BytesIO()
+    c = canvas.Canvas(buffer_stream, pagesize=(width, height))
+
+    try:
+        c.setFont("Helvetica-Bold", 12)
+    except Exception:
+        c.setFont("Helvetica", 12)
+
+    margin_x = 40.0
+    margin_y = height - 30.0
+
+    testo = str(header_text)
+    c.drawString(margin_x, margin_y, testo)
+
+    c.save()
+    buffer_stream.seek(0)
+
+    try:
+        overlay_reader = PdfReader(buffer_stream)
+        overlay_page = overlay_reader.pages[0]
+        page.merge_page(overlay_page)
+    except Exception:
+        # Se qualcosa va storto nel merge, non blocchiamo l'esecuzione
+        pass
 
 
 # =============================================================================
@@ -430,11 +528,23 @@ def create_mix_file(base_directory,
 
 def create_individual_pdfs(base_directory, report_text):
     """
-    Crea un PDF per ogni file *_mix.txt presente in 00_MixOutput.
+    Crea PDF individuali nella directory 00_Pdf.
 
-    - Usa un font monospaziato (Courier) per preservare l'indentazione;
-    - Ignora qualunque file che inizi con '00';
-    - Salva i PDF in 00_Pdf con lo stesso nome base del mix.
+    1) PDF da file *_mix.txt in 00_MixOutput:
+       - usa font monospaziato (Courier);
+       - ignora file che iniziano per '00';
+       - SALTA i mix relativi a cartelle che possiedono già PDF originali
+         (per evitare duplicati rispetto ai *_pdfmix.pdf).
+
+    2) PDF da file .pdf originali nelle cartelle testXX:
+       - cerca ricorsivamente tutti i .pdf;
+       - crea un unico PDF per cartella;
+       - applica su OGNI pagina un'intestazione con il nome della cartella
+         (es. 'accogli.joele__test01');
+       - salva in 00_Pdf come '<cartella>_pdfmix.pdf'.
+
+    La logica delle pagine pari per la stampa fronte/retro è gestita
+    successivamente dal MEGAmerge nella scheda Export.
     """
     base_dir = _extract_directory(base_directory)
     if base_dir == "" or not os.path.isdir(base_dir):
@@ -446,13 +556,6 @@ def create_individual_pdfs(base_directory, report_text):
 
     mix_output_directory = os.path.join(base_dir, "00_MixOutput")
     pdf_output_directory = os.path.join(base_dir, "00_Pdf")
-
-    if not os.path.isdir(mix_output_directory):
-        messagebox.showwarning(
-            "Attenzione",
-            "La directory 00_MixOutput non esiste. Esegui prima la fase di mix."
-        )
-        return
 
     try:
         os.makedirs(pdf_output_directory, exist_ok=True)
@@ -479,7 +582,70 @@ def create_individual_pdfs(base_directory, report_text):
 
     created_count = 0
 
-    names = sorted(os.listdir(mix_output_directory))
+    # ============================================================
+    # 0) Prima passo: verifico quali cartelle contengono PDF originali
+    #    → costruisco un set di nomi cartella (es. 'accogli.joele__test01')
+    # ============================================================
+    subdirs_con_pdf = set()
+
+    try:
+        entries = sorted(os.listdir(base_dir))
+    except Exception:
+        entries = []
+
+    idx_entry = 0
+    while idx_entry < len(entries):
+        entry_name = entries[idx_entry]
+        idx_entry = idx_entry + 1
+
+        if entry_name.startswith("00"):
+            continue
+
+        subdir_path = os.path.join(base_dir, entry_name)
+        if not os.path.isdir(subdir_path):
+            continue
+
+        # scandisco la cartella per vedere se esiste almeno un .pdf
+        found_pdf = False
+
+        for root, dirs, files in os.walk(subdir_path):
+            # escludo eventuali sottocartelle "00*"
+            safe_dirs = []
+            d_idx = 0
+            while d_idx < len(dirs):
+                dname = str(dirs[d_idx])
+                if not dname.startswith("00"):
+                    safe_dirs.append(dname)
+                d_idx = d_idx + 1
+            dirs[:] = safe_dirs
+
+            f_idx = 0
+            while f_idx < len(files):
+                fn = files[f_idx]
+                f_idx = f_idx + 1
+
+                if fn.lower().endswith(".pdf"):
+                    found_pdf = True
+                    break
+
+            if found_pdf:
+                break
+
+        if found_pdf:
+            subdirs_con_pdf.add(entry_name)
+
+    # ============================================================
+    # 1) PDF dai file *_mix.txt (comportamento originario,
+    #    ma saltando le cartelle che hanno PDF originali)
+    # ============================================================
+    if os.path.isdir(mix_output_directory):
+        try:
+            names = sorted(os.listdir(mix_output_directory))
+        except Exception:
+            names = []
+    else:
+        names = []
+
     i = 0
     while i < len(names):
         file_name = names[i]
@@ -491,14 +657,51 @@ def create_individual_pdfs(base_directory, report_text):
         if not file_name.endswith("_mix.txt"):
             continue
 
+        # ricavo il "nome cartella" dal nome del mix:
+        # es. 'accogli.joele__test01_mix.txt' -> 'accogli.joele__test01'
+        base_name = file_name[:-len("_mix.txt")]
+
+        # se per questa cartella esistono già PDF originali,
+        # NON creo il PDF dal mix per evitare duplicati
+        if base_name in subdirs_con_pdf:
+            continue
+
         mix_path = os.path.join(mix_output_directory, file_name)
 
         try:
             with open(mix_path, "r", encoding="utf-8") as f:
                 content = f.read()
         except UnicodeDecodeError:
-            with open(mix_path, "r", encoding="latin-1", errors="replace") as f:
-                content = f.read()
+            try:
+                with open(
+                    mix_path,
+                    "r",
+                    encoding="latin-1",
+                    errors="replace",
+                ) as f:
+                    content = f.read()
+            except Exception as exc:
+                report_text.insert(
+                    "end",
+                    "Errore nella lettura di "
+                    + file_name
+                    + ": "
+                    + str(exc)
+                    + "\n",
+                )
+                report_text.see("end")
+                continue
+        except Exception as exc:
+            report_text.insert(
+                "end",
+                "Errore nella lettura di "
+                + file_name
+                + ": "
+                + str(exc)
+                + "\n",
+            )
+            report_text.see("end")
+            continue
 
         content = _normalize_text(content)
         content_for_pdf = estrai_contenuto_per_pdf_da_mix(content)
@@ -512,13 +715,111 @@ def create_individual_pdfs(base_directory, report_text):
             story = [Preformatted(wrapped, monospace_style)]
             doc.build(story)
             created_count = created_count + 1
-            report_text.insert("end", "Creato PDF: " + pdf_name + "\n")
+            report_text.insert("end", "Creato PDF da mix: " + pdf_name + "\n")
             report_text.see("end")
         except Exception as exc:
             report_text.insert(
                 "end",
                 "Errore nella creazione del PDF da "
                 + file_name
+                + ": "
+                + str(exc)
+                + "\n",
+            )
+            report_text.see("end")
+
+    # ============================================================
+    # 2) PDF originali per cartella (solo da .pdf)
+    #    → un PDF per cartella, header con nome cartella su ogni pagina
+    # ============================================================
+    # riutilizzo 'entries' già letti sopra
+    idx_entry = 0
+    while idx_entry < len(entries):
+        entry_name = entries[idx_entry]
+        idx_entry = idx_entry + 1
+
+        if entry_name.startswith("00"):
+            continue
+
+        subdir_path = os.path.join(base_dir, entry_name)
+        if not os.path.isdir(subdir_path):
+            continue
+
+        writer = PdfWriter()
+        pages_found = 0
+
+        for root, dirs, files in os.walk(subdir_path):
+            # escludo eventuali sottocartelle "00*"
+            safe_dirs = []
+            d_idx = 0
+            while d_idx < len(dirs):
+                dname = str(dirs[d_idx])
+                if not dname.startswith("00"):
+                    safe_dirs.append(dname)
+                d_idx = d_idx + 1
+            dirs[:] = safe_dirs
+
+            f_idx = 0
+            while f_idx < len(files):
+                fn = files[f_idx]
+                f_idx = f_idx + 1
+
+                if not fn.lower().endswith(".pdf"):
+                    continue
+
+                pdf_input_path = os.path.join(root, fn)
+
+                try:
+                    reader = PdfReader(pdf_input_path)
+                except Exception as exc:
+                    report_text.insert(
+                        "end",
+                        "Errore nella lettura del PDF '"
+                        + fn
+                        + "' in "
+                        + entry_name
+                        + ": "
+                        + str(exc)
+                        + "\n",
+                    )
+                    report_text.see("end")
+                    continue
+
+                p_index = 0
+                while p_index < len(reader.pages):
+                    page = reader.pages[p_index]
+                    _add_header_to_page(page, entry_name)
+                    writer.add_page(page)
+                    pages_found = pages_found + 1
+                    p_index = p_index + 1
+
+        if pages_found == 0:
+            # nessun PDF trovato in questa cartella, passo alla successiva
+            continue
+
+        out_name = entry_name + "_pdfmix.pdf"
+        out_path = os.path.join(pdf_output_directory, out_name)
+
+        try:
+            with open(out_path, "wb") as out_f:
+                writer.write(out_f)
+            created_count = created_count + 1
+            report_text.insert(
+                "end",
+                "Creato PDF da PDF originali per cartella "
+                + entry_name
+                + ": "
+                + out_name
+                + " (pagine: "
+                + str(pages_found)
+                + ")\n",
+            )
+            report_text.see("end")
+        except Exception as exc:
+            report_text.insert(
+                "end",
+                "Errore nella scrittura del PDF di gruppo per "
+                + entry_name
                 + ": "
                 + str(exc)
                 + "\n",
@@ -532,6 +833,9 @@ def create_individual_pdfs(base_directory, report_text):
         + "\n",
     )
     report_text.see("end")
+
+
+
 
 
 # =============================================================================
