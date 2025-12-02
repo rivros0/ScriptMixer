@@ -239,8 +239,21 @@ def mix_files(lbl_or_var_directory,
         )
         return
 
-    report_text.insert("end", "Inizio creazione dei file di mix...\n")
+        report_text.insert("end", "Inizio creazione dei file di mix...\n")
 
+    # Azzeriamo prima la colonna "mix_file" per tutte le righe
+    items = tree.get_children()
+    idx = 0
+    while idx < len(items):
+        item_id = items[idx]
+        try:
+            tree.set(item_id, "mix_file", "")
+        except Exception:
+            # In caso di problemi non blocchiamo l'esecuzione
+            pass
+        idx = idx + 1
+
+    # Ora creiamo i file di mix e aggiorniamo la tabella
     items = tree.get_children()
     idx = 0
     while idx < len(items):
@@ -249,7 +262,7 @@ def mix_files(lbl_or_var_directory,
         if values and len(values) > 0:
             subdir = str(values[0]).strip()
             if subdir != "" and not subdir.startswith("00"):
-                msg, _ = create_mix_file(
+                msg, mix_path = create_mix_file(
                     base_directory=base_dir,
                     subdir=subdir,
                     prompt_string=prompt_string,
@@ -258,10 +271,23 @@ def mix_files(lbl_or_var_directory,
                     include_prompt=include_prompt,
                     include_subdir=include_subdir,
                 )
+
+                # Log dell'operazione
                 report_text.insert("end", msg)
+
+                # Se il file di mix è stato creato correttamente,
+                # aggiorniamo la colonna "mix_file" della riga corrispondente
+                if mix_path is not None and mix_path != "":
+                    try:
+                        tree.set(item_id, "mix_file", mix_path)
+                    except Exception:
+                        # Non blocchiamo in caso di errore sulla Treeview
+                        pass
+
         idx = idx + 1
 
     report_text.insert("end", "Creazione dei file di mix completata.\n")
+
     report_text.see("end")
 
 

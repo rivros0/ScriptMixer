@@ -10,13 +10,30 @@ import similarity_ftp
 import ftpAgent
 import sim_map_ftp
 
-
 YELLOW_BG = "#85187c"
 
 
 # ======================================================================
 # UTILITÀ LOCALI
 # ======================================================================
+
+def format_bytes(num_bytes):
+    """
+    Converte un numero di byte in formato leggibile (B, KB, MB, GB, TB).
+    """
+    unita = ["B", "KB", "MB", "GB", "TB"]
+    valore = float(num_bytes)
+    indice = 0
+
+    while valore >= 1024.0 and indice < len(unita) - 1:
+        valore = valore / 1024.0
+        indice = indice + 1
+
+    if indice == 0:
+        return str(int(valore)) + " " + unita[indice]
+
+    return "{:.1f} {}".format(valore, unita[indice])
+
 
 def _sanitize_alunno_tag(raw):
     """
@@ -58,8 +75,8 @@ def _derive_candidate_tags(raw):
         p2 = parts[1]
 
         if p1 != "" and p2 != "":
-            candidates.append(p1 + "." + p2)
             candidates.append(p2 + "." + p1)
+            candidates.append(p1 + "." + p2)
             candidates.append(p1)
             candidates.append(p2)
     elif len(parts) == 1 and parts[0] != "":
@@ -133,20 +150,21 @@ def _match_test_dir(test_dirs, alunno_raw):
 
         i = i + 1
 
-    # 2) testNN-<tag> oppure testNN_<tag>
+    # 2) testNN- / testNN_
     i = 0
     while i < len(candidates):
         tag = candidates[i]
-        pattern_dash = "test" + tag
-        pattern_underscore = "test" + tag
+        pattern_dash = "-" + tag
+        pattern_underscore = "_" + tag
 
         for low_name, original in td_low_map.items():
-            if low_name.endswith(pattern_dash) or low_name.endswith(pattern_underscore):
-                return original
+            if low_name.startswith("test"):
+                if low_name.endswith(pattern_dash) or low_name.endswith(pattern_underscore):
+                    return original
 
         i = i + 1
 
-    # 3) Fallback permissivo: qualunque nome che contenga "test" e il tag
+    # 3) Fallback permissivo
     i = 0
     while i < len(candidates):
         tag = candidates[i]
@@ -165,12 +183,11 @@ def _match_test_dir(test_dirs, alunno_raw):
 def create_frame_domini(root, global_config):
     """
     Gestione Domini:
-      - Crea/carica CSV
-      - Autoload CSV se domains_csv_path è valorizzato
+      - Carica CSV (manuale o autoload)
       - Associa alunno → cartella test
-      - Download FTP (ftpAgent) usando SOLO dati del CSV
+      - Download FTP (ftpAgent) SOLO se necessario
       - Analisi somiglianze (similarity_ftp)
-      - Finestra riepilogo per tutti gli alunni (via sim_map_ftp)
+      - Apertura automatica mappa similitudini (sim_map_ftp)
     """
     frame = tk.Frame(root, bg=YELLOW_BG)
 
@@ -182,9 +199,32 @@ def create_frame_domini(root, global_config):
     students_in_test_cache = []
     students_in_domain_cache = []
 
-    # ==================================================================
-    # TABELLA
-    # ==================================================================
+    pending_analysis_after_download = False
+
+    # ------------------------------------------------------------------
+    # RIGA 0: pulsanti + peso totale FTP
+    # ------------------------------------------------------------------
+    btn_analizza = tk.Button(
+        frame,
+        text="Analizza somiglianze",
+        width=24,
+        state="disabled",
+        relief="raised"
+    )
+    btn_analizza.grid(row=0, column=1, padx=6, pady=6, sticky="w")
+
+    lbl_peso_totale = tk.Label(
+        frame,
+        text="Totale FTP: 0 B",
+        bg=YELLOW_BG,
+        fg="white",
+        anchor="e"
+    )
+    lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")
+
+    # ------------------------------------------------------------------
+    # RIGA 1: tabella principale
+    # ------------------------------------------------------------------
     colonne = (
         "Alunno",
         "Dominio",
@@ -225,9 +265,9 @@ def create_frame_domini(root, global_config):
     frame.grid_rowconfigure(1, weight=1)
     frame.grid_columnconfigure(5, weight=1)
 
-    # ==================================================================
-    # LOG
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # RIGA 3: log
+    # ------------------------------------------------------------------
     txt_log = tk.Text(frame, height=8, width=120)
     txt_log.grid(row=3, column=0, columnspan=7, padx=10, pady=5, sticky="ew")
 
@@ -242,7 +282,7 @@ def create_frame_domini(root, global_config):
     testdir_by_item = {}       # item_id -> cartella test associata
 
     # ==================================================================
-    # SEZIONE: MODELLO CSV
+    # SEZIONE: MODELLO CSV (manteniamo la funzione, usabile da menu)
     # ==================================================================
     def crea_modello_csv():
         base_dir = global_config["selected_directory"].get().strip()
@@ -264,7 +304,8 @@ def create_frame_domini(root, global_config):
 
         test_dirs = _list_test_dirs(base_dir)
 
-        cognomi = set()
+        cognomi = []
+
         i = 0
         while i < len(test_dirs):
             nome = test_dirs[i]
@@ -276,7 +317,7 @@ def create_frame_domini(root, global_config):
 
             tag_norm = _sanitize_alunno_tag(tag)
             if tag_norm != "":
-                cognomi.add(tag_norm)
+                cognomi.append(tag_norm)
             i = i + 1
 
         try:
@@ -296,10 +337,19 @@ def create_frame_domini(root, global_config):
                     j = j + 1
 
             log("Modello CSV creato in: " + percorso_csv)
+
+            if len(cognomi) > 0:
+                log(
+                    "Inseriti automaticamente {} nominativi (da nomi cartella).".format(
+                        len(visti)
+                    )
+                )
+            else:
+                log("Nessuna cartella utile trovata: modello creato con sole intestazioni.")
         except Exception as e:
             messagebox.showerror(
                 "Errore",
-                "Errore nella creazione del CSV:\n" + str(e),
+                "Errore nella creazione del modello CSV:\n" + str(e),
             )
 
     # ==================================================================
@@ -318,9 +368,7 @@ def create_frame_domini(root, global_config):
         credenziali_by_item.clear()
         testdir_by_item.clear()
 
-        btn_scarica.configure(state="disabled")
         btn_analizza.configure(state="disabled")
-        btn_mappa.configure(state="disabled")
 
         metrics_by_student_cache.clear()
         texts_test_cache.clear()
@@ -329,6 +377,7 @@ def create_frame_domini(root, global_config):
         del students_in_domain_cache[:]
 
         base_dir = global_config["selected_directory"].get().strip()
+
         if not base_dir or not os.path.isdir(base_dir):
             messagebox.showwarning(
                 "Attenzione",
@@ -381,7 +430,7 @@ def create_frame_domini(root, global_config):
             cognome = row.get("cognome", "")
             if cognome is None:
                 cognome = ""
-            cognome = str(cognome).strip().lower()
+            cognome = cognome.strip().lower()
 
             dominio = row.get("dominio", "")
             if dominio is None:
@@ -403,7 +452,6 @@ def create_frame_domini(root, global_config):
                 continue
 
             found_test = _match_test_dir(test_dirs, cognome)
-
             if found_test != "":
                 stato_iniziale = "Test OK"
             else:
@@ -435,301 +483,28 @@ def create_frame_domini(root, global_config):
         )
 
         if righe_inserite > 0:
-            btn_scarica.configure(state="normal")
-            log(
-                "Bottone download FTP abilitato ({} domini caricati).".format(
-                    righe_inserite
-                )
-            )
+            btn_analizza.configure(state="normal")
         else:
-            btn_scarica.configure(state="disabled")
+            btn_analizza.configure(state="disabled")
             messagebox.showwarning(
                 "Attenzione",
                 "Nessuna riga valida trovata nel CSV.",
             )
 
-    def carica_csv_dialog():
+    def btn_carica_click():
         carica_csv(None)
 
-    # ==================================================================
-    # SEZIONE: DOWNLOAD FTP
-    # ==================================================================
-    def scarica_tutti_domini_ftp():
-        """
-        Prepara i job e avvia ftpAgent.start_batch_download
-        usando SOLO i dati del CSV (dominio, ftp_user, ftp_password).
-        """
-        items = tree.get_children()
-        if not items:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessun dominio in tabella. Carica prima un CSV.",
-            )
-            return
-
-        base_dir = global_config["selected_directory"].get().strip()
-        if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona prima la directory principale delle prove.",
-            )
-            return
-
-        jobs = []
-
-        i = 0
-        while i < len(items):
-            item_id = items[i]
-            valori_corr = list(tree.item(item_id, "values"))
-
-            alunno = valori_corr[0]
-            dominio = valori_corr[1]
-            stato_base = valori_corr[2]
-
-            cred = credenziali_by_item.get(item_id, ("", ""))
-            ftp_user = cred[0]
-            ftp_pass = cred[1]
-
-            if dominio == "" or ftp_user == "" or ftp_pass == "":
-                tree.set(item_id, "Stato", "Dati FTP incompleti")
-                i = i + 1
-                continue
-
-            job = {
-                "item_id": item_id,
-                "alunno": alunno,
-                "dominio": dominio,
-                "stato_base": stato_base,
-                "ftp_user": ftp_user,
-                "ftp_pass": ftp_pass,
-            }
-            jobs.append(job)
-            i = i + 1
-
-        if not jobs:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessun job FTP con credenziali complete.",
-            )
-            return
-
-        btn_scarica.configure(state="disabled")
-        btn_analizza.configure(state="disabled")
-        btn_mappa.configure(state="disabled")
-
-        ftpAgent.start_batch_download(jobs, base_dir, update_queue)
-
-    # ==================================================================
-    # SEZIONE: AGGIORNAMENTO DA update_queue
-    # ==================================================================
-    def process_update_queue():
-        """
-        Elabora i messaggi provenienti da ftpAgent.
-        """
-        while True:
-            try:
-                msg = update_queue.get_nowait()
-            except queue.Empty:
-                break
-
-            tipo = msg[0]
-
-            if tipo == "log":
-                log(msg[1])
-            elif tipo == "set":
-                item_id = msg[1]
-                colonna = msg[2]
-                valore = msg[3]
-                if item_id in tree.get_children():
-                    tree.set(item_id, colonna, valore)
-            elif tipo == "fine_download":
-                log("=== Download FTP completato ===")
-                btn_scarica.configure(state="normal")
-                btn_analizza.configure(state="normal")
-                btn_mappa.configure(state="normal")
-
-        frame.after(200, process_update_queue)
-
-    # ==================================================================
-    # SEZIONE: ANALISI SOMIGLIANZE
-    # ==================================================================
-    def analizza_somiglianze():
-        """
-        Costruisce le mappe:
-            - tests_dirs:   studente -> cartella test locale
-            - domini_dirs:  studente -> cartella dominio scaricato (00_DominiFTP)
-        e lancia similarity_ftp.analyze_reuse_by_student.
-        """
-        base_dir = global_config["selected_directory"].get().strip()
-        if not base_dir or not os.path.isdir(base_dir):
-            messagebox.showwarning(
-                "Attenzione",
-                "Seleziona prima la directory principale delle prove.",
-            )
-            return
-
-        # Cartelle locali con i domini scaricati
-        dir_ftp = os.path.join(base_dir, "00_DominiFTP")
-        if not os.path.isdir(dir_ftp):
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessuna cartella 00_DominiFTP trovata.\nEsegui prima il download dei domini.",
-            )
-            return
-
-        # ------------------------------------------------------------
-        # Costruzione dizionari tests_dirs e domini_dirs
-        # chiave: alunno (cognome normalizzato come in tabella)
-        # ------------------------------------------------------------
-        tests_dirs = {}
-        domini_dirs = {}
-
-        items = tree.get_children()
-        indice = 0
-        while indice < len(items):
-            item_id = items[indice]
-            valori = list(tree.item(item_id, "values"))
-
-            if len(valori) >= 3:
-                alunno = valori[0]
-                test_dir_name = testdir_by_item.get(item_id, "")
-
-                if alunno is None:
-                    alunno = ""
-                alunno = str(alunno).strip().lower()
-
-                if test_dir_name is None:
-                    test_dir_name = ""
-                test_dir_name = str(test_dir_name).strip()
-
-                # cartella test associata (es. "alberti.gabriel2006__test01")
-                if alunno != "" and test_dir_name != "":
-                    path_test = os.path.join(base_dir, test_dir_name)
-                    if os.path.isdir(path_test):
-                        tests_dirs[alunno] = path_test
-
-                # cartella dominio scaricato: 00_DominiFTP/<alunno>
-                if alunno != "":
-                    path_dom = os.path.join(dir_ftp, alunno)
-                    if os.path.isdir(path_dom):
-                        domini_dirs[alunno] = path_dom
-
-            indice = indice + 1
-
-        if not tests_dirs:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessuna cartella test valida trovata.\nControlla le associazioni alunno/test.",
-            )
-            return
-
-        if not domini_dirs:
-            messagebox.showwarning(
-                "Attenzione",
-                "Nessuna cartella dominio valida trovata in 00_DominiFTP.",
-            )
-            return
-
-        # Estensioni di interesse per il confronto
-        estensioni = [".php", ".html", ".css", ".js"]
-
-        def progress_cb(phase, current, total, name):
-            if total <= 0:
-                percent = 0
-            else:
-                percent = int((current * 100) / total)
-            log(
-                "Progresso {}: {}/{} ({}%) → '{}'".format(
-                    str(phase), current, total, percent, name
-                )
-            )
-
-        log("=== Avvio analisi somiglianze (verifica vs MERGE dominio) ===")
-
-        (
-            metrics_by_student,
-            students_in_test,
-            students_in_domain,
-            texts_test,
-            merged_domain_texts,
-        ) = similarity_ftp.analyze_reuse_by_student(
-            tests_dirs,
-            domini_dirs,
-            estensioni,
-            progress_cb,
-        )
-
-        # Salvataggio nei cache locali
-        metrics_by_student_cache.clear()
-        metrics_by_student_cache.update(metrics_by_student)
-
-        texts_test_cache.clear()
-        texts_test_cache.update(texts_test)
-
-        merged_domain_texts_cache.clear()
-        merged_domain_texts_cache.update(merged_domain_texts)
-
-        del students_in_test_cache[:]
-        students_in_test_cache.extend(students_in_test)
-
-        del students_in_domain_cache[:]
-        students_in_domain_cache.extend(students_in_domain)
-
-        btn_mappa.configure(state="normal")
-        btn_analizza.configure(state="normal")
-
-        log("=== Analisi somiglianze completata ===")
-
-    # ==================================================================
-    # BOTTONI PRINCIPALI
-    # ==================================================================
-    btn_modello = tk.Button(frame, text="Crea modello CSV", width=20, command=crea_modello_csv)
-    btn_modello.grid(row=0, column=0, padx=6, pady=6, sticky="w")
-
-    btn_carica = tk.Button(frame, text="Carica file domini (CSV)", width=24)
-    btn_carica.grid(row=0, column=1, padx=6, pady=6, sticky="w")
-
-    btn_scarica = tk.Button(
+    btn_carica = tk.Button(
         frame,
-        text="Scarica tutti i domini via FTP",
+        text="Carica file domini (CSV)",
         width=24,
-        state="disabled",
-        command=scarica_tutti_domini_ftp,
+        command=btn_carica_click,
+        relief="raised"
     )
-    btn_scarica.grid(row=0, column=2, padx=6, pady=6, sticky="w")
-
-    btn_analizza = tk.Button(
-        frame,
-        text="Analizza somiglianze",
-        width=24,
-        state="disabled",
-        command=analizza_somiglianze,
-    )
-    btn_analizza.grid(row=0, column=3, padx=6, pady=6, sticky="w")
-
-    btn_mappa = tk.Button(
-        frame,
-        text="Mostra mappa similitudini",
-        width=24,
-        state="disabled",
-        command=lambda: sim_map_ftp.open_similarity_map(
-            frame,
-            metrics_by_student_cache,
-            texts_test_cache,
-            merged_domain_texts_cache,
-            students_in_test_cache,
-            students_in_domain_cache,
-        ),
-    )
-    btn_mappa.grid(row=0, column=4, padx=6, pady=6, sticky="w")
-
-    lbl_peso_totale = tk.Label(frame, text="Totale FTP: 0 B", bg=YELLOW_BG, fg="white")
-    lbl_peso_totale.grid(row=0, column=5, padx=10, pady=6, sticky="e")
-
-    btn_carica.configure(command=carica_csv_dialog)
+    btn_carica.grid(row=0, column=0, padx=6, pady=6, sticky="w")
 
     # ==================================================================
-    # AGGIORNAMENTO PERIODICO (QUEUE + PESO FTP)
+    # SEZIONE: PESO TOTALE 00_DominiFTP
     # ==================================================================
     def aggiorna_peso_totale_ftp():
         base_dir = global_config["selected_directory"].get().strip()
@@ -756,24 +531,305 @@ def create_frame_domini(root, global_config):
                     pass
                 j = j + 1
 
-        if totale < 1024:
-            testo = "{} B".format(totale)
-        else:
-            kb = float(totale) / 1024.0
-            if kb < 1024:
-                testo = "{:.1f} KB".format(kb)
+        lbl_peso_totale.config(text="Totale FTP: " + format_bytes(totale))
+
+    # ==================================================================
+    # SEZIONE: SERVIZIO CODA (FTP → GUI)
+    # ==================================================================
+    def process_update_queue():
+        nonlocal pending_analysis_after_download
+
+        while True:
+            try:
+                task = update_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            tipo = task[0]
+
+            if tipo == "log":
+                log(task[1])
+
+            elif tipo == "set":
+                item_id = task[1]
+                colonna = task[2]
+                valore = task[3]
+                try:
+                    tree.set(item_id, colonna, valore)
+                except Exception:
+                    pass
+
+            elif tipo == "fine_download":
+                aggiorna_peso_totale_ftp()
+                log("=== Download FTP completato ===")
+                btn_analizza.configure(state="normal")
+
+                if pending_analysis_after_download:
+                    pending_analysis_after_download = False
+                    base_dir = global_config["selected_directory"].get().strip()
+                    if base_dir and os.path.isdir(base_dir):
+                        dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
+                        esegui_analisi(base_dir, dir_ftp_base)
+
+    # ==================================================================
+    # SEZIONE: ANALISI SOMIGLIANZE (core)
+    # ==================================================================
+    def esegui_analisi(base_dir, dir_ftp_base):
+        """
+        Esegue l'analisi di similarità usando:
+          - tests_dirs:   alunno -> cartella test locale
+          - domini_dirs:  alunno -> cartella dominio scaricato (00_DominiFTP)
+        Poi aggiorna le cache e apre direttamente la mappa similitudini.
+        """
+        tests_dirs = {}
+        domini_dirs = {}
+
+        items = tree.get_children()
+
+        i = 0
+        while i < len(items):
+            item_id = items[i]
+            valori = list(tree.item(item_id, "values"))
+
+            if len(valori) >= 2:
+                alunno = valori[0]
+                if alunno is None:
+                    alunno = ""
+                alunno_key = str(alunno).strip().lower()
+
+                nome_cartella_test = testdir_by_item.get(item_id, "")
+                if nome_cartella_test is None:
+                    nome_cartella_test = ""
+                nome_cartella_test = str(nome_cartella_test).strip()
+
+                if alunno_key != "" and nome_cartella_test != "":
+                    percorso_test = os.path.join(base_dir, nome_cartella_test)
+                    if os.path.isdir(percorso_test):
+                        tests_dirs[alunno_key] = percorso_test
+
+                if alunno_key != "":
+                    percorso_dom = os.path.join(dir_ftp_base, alunno_key)
+                    if os.path.isdir(percorso_dom):
+                        domini_dirs[alunno_key] = percorso_dom
+                        try:
+                            tree.set(item_id, "Stato", "Test OK / FTP presente")
+                        except Exception:
+                            pass
+
+            i = i + 1
+
+        if not tests_dirs:
+            messagebox.showwarning(
+                "Attenzione",
+                "Nessuna cartella test valida trovata.\nControlla le associazioni alunno/test.",
+            )
+            return
+
+        if not domini_dirs:
+            messagebox.showwarning(
+                "Attenzione",
+                "Nessuna cartella dominio valida trovata in 00_DominiFTP.",
+            )
+            return
+
+        estensioni = (".php", ".html", ".htm", ".css", ".js", ".txt")
+
+        def progress_cb(phase, current, total, name):
+            if total <= 0:
+                percent = 0
             else:
-                mb = kb / 1024.0
-                testo = "{:.2f} MB".format(mb)
+                percent = int(round((current * 100.0) / float(total)))
 
-        lbl_peso_totale.config(text="Totale FTP: " + testo)
+            if phase == "read_tests":
+                log(
+                    "Lettura verifiche: {} / {} ({}%) → '{}'".format(
+                        current, total, percent, name
+                    )
+                )
+            elif phase == "merge_domains":
+                log(
+                    "Merge domini: {} / {} ({}%) → '{}'".format(
+                        current, total, percent, name
+                    )
+                )
+            elif phase == "compare":
+                log(
+                    "Confronto verifica↔dominio: {} / {} ({}%) → '{}'".format(
+                        current, total, percent, name
+                    )
+                )
+            else:
+                log(
+                    "Fase {}: {} / {} ({}%) → '{}'".format(
+                        str(phase), current, total, percent, name
+                    )
+                )
 
+        log("=== Avvio analisi somiglianze (verifica vs MERGE dominio) ===")
+
+        (
+            metrics_by_student,
+            students_in_test,
+            students_in_domain,
+            texts_test,
+            merged_domain_texts,
+        ) = similarity_ftp.analyze_reuse_by_student(
+            tests_dirs,
+            domini_dirs,
+            estensioni,
+            progress_cb,
+        )
+
+        metrics_by_student_cache.clear()
+        metrics_by_student_cache.update(metrics_by_student)
+
+        texts_test_cache.clear()
+        texts_test_cache.update(texts_test)
+
+        merged_domain_texts_cache.clear()
+        merged_domain_texts_cache.update(merged_domain_texts)
+
+        del students_in_test_cache[:]
+        students_in_test_cache.extend(students_in_test)
+
+        del students_in_domain_cache[:]
+        students_in_domain_cache.extend(students_in_domain)
+
+        log("=== Analisi somiglianze completata ===")
+
+        if len(metrics_by_student_cache) == 0:
+            log("Nessun alunno con verifica e dominio disponibili per il confronto.")
+            return
+
+        sim_map_ftp.open_similarity_map(
+            frame,
+            metrics_by_student_cache,
+            texts_test_cache,
+            merged_domain_texts_cache,
+            students_in_test_cache,
+            students_in_domain_cache,
+        )
+
+    # ==================================================================
+    # SEZIONE: ANALIZZA SOMIGLIANZE (workflow unico)
+    # ======================================================================
+    def analizza_somiglianze():
+        """
+        Workflow unico:
+          1) Garantisce che il CSV sia caricato.
+          2) Se esiste 00_DominiFTP non vuota → usa direttamente quei dati.
+          3) Altrimenti avvia il download FTP e, al termine, lancia esegui_analisi.
+        """
+        nonlocal pending_analysis_after_download
+
+        base_dir = global_config["selected_directory"].get().strip()
+
+        if not base_dir or not os.path.isdir(base_dir):
+            messagebox.showwarning(
+                "Attenzione",
+                "Seleziona prima la directory principale delle prove.",
+            )
+            return
+
+        if not tree.get_children():
+            carica_csv(None)
+            if not tree.get_children():
+                messagebox.showwarning(
+                    "Attenzione",
+                    "Nessun dominio in tabella. Carica prima un file CSV.",
+                )
+                return
+
+        dir_ftp_base = os.path.join(base_dir, "00_DominiFTP")
+
+        use_existing = False
+
+        if os.path.isdir(dir_ftp_base):
+            try:
+                elementi = os.listdir(dir_ftp_base)
+            except Exception:
+                elementi = []
+
+            if len(elementi) > 0:
+                use_existing = True
+
+        if use_existing:
+            log("Uso i dati già presenti in 00_DominiFTP (nessun nuovo download).")
+            esegui_analisi(base_dir, dir_ftp_base)
+            return
+
+        log("Nessuna directory 00_DominiFTP con dati: avvio download FTP prima dell'analisi.")
+
+        items = tree.get_children()
+        if not items:
+            messagebox.showwarning(
+                "Attenzione",
+                "Nessun dominio in tabella. Carica prima un file CSV.",
+            )
+            return
+
+        metrics_by_student_cache.clear()
+        texts_test_cache.clear()
+        merged_domain_texts_cache.clear()
+        del students_in_test_cache[:]
+        del students_in_domain_cache[:]
+
+        jobs = []
+
+        i = 0
+        while i < len(items):
+            item_id = items[i]
+            valori_corr = list(tree.item(item_id, "values"))
+
+            alunno = valori_corr[0]
+            dominio = valori_corr[1]
+            stato_base = valori_corr[2]
+
+            cred = credenziali_by_item.get(item_id, ("", ""))
+            ftp_user = cred[0]
+            ftp_pass = cred[1]
+
+            if dominio == "" or ftp_user == "" or ftp_pass == "":
+                try:
+                    tree.set(item_id, "Stato", "Dati FTP incompleti")
+                except Exception:
+                    pass
+                i = i + 1
+                continue
+
+            job = {
+                "item_id": item_id,
+                "alunno": alunno,
+                "dominio": dominio,
+                "stato_base": stato_base,
+                "ftp_user": ftp_user,
+                "ftp_pass": ftp_pass,
+            }
+
+            jobs.append(job)
+            i = i + 1
+
+        if not jobs:
+            messagebox.showwarning(
+                "Attenzione",
+                "Nessun job FTP con credenziali complete.",
+            )
+        else:
+            btn_analizza.configure(state="disabled")
+            pending_analysis_after_download = True
+            ftpAgent.start_batch_download(jobs, base_dir, update_queue)
+
+    btn_analizza.configure(command=analizza_somiglianze)
+
+    # ==================================================================
+    # TICK PERIODICO: coda + peso FTP
+    # ==================================================================
     def tick():
         process_update_queue()
         aggiorna_peso_totale_ftp()
         frame.after(1000, tick)
 
-    frame.after(200, tick)
+    frame.after(300, tick)
 
     # ==================================================================
     # AUTOLOAD CSV DALLA CONFIGURAZIONE
@@ -843,6 +899,6 @@ def create_frame_domini(root, global_config):
         log("Autoload CSV: caricamento automatico di: " + path_csv)
         carica_csv(path_csv)
 
-    frame.after(300, try_autoload_csv)
+    frame.after(500, try_autoload_csv)
 
     return frame

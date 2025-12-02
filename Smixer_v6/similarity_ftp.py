@@ -286,6 +286,35 @@ def calculate_text_similarity_percent(text1, text2):
     return ratio * 100.0
 
 
+def _normalize_for_inclusion(text):
+    """
+    Normalizza il testo per verificare se un contenuto è integralmente
+    incluso in un altro. Riduce tutte le sequenze di whitespace a singoli
+    spazi e rimuove spazi iniziali/finali.
+    """
+    if text is None:
+        return ""
+
+    s = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    righe = s.split("\n")
+    righe_norm = []
+
+    i = 0
+    while i < len(righe):
+        riga = righe[i].rstrip()
+        righe_norm.append(riga)
+        i = i + 1
+
+    s = "\n".join(righe_norm)
+
+    parti = s.split()
+    s = " ".join(parti)
+
+    s = s.strip()
+    return s
+
+
 def compute_merge_metrics(test_text, merged_domain_text, min_line_len=4, min_block_chars=8):
     """
     Calcola le metriche di confronto tra:
@@ -297,13 +326,21 @@ def compute_merge_metrics(test_text, merged_domain_text, min_line_len=4, min_blo
       - shared_lines_count
       - shared_chars_len
       - percent_shared_chars_on_test
+      - percent_shared_chars_on_domain
       - total_lines_test
       - total_chars_test
+      - total_chars_domain
+      - full_inclusion_flag
     """
     risultato = {}
 
-    testo_test = test_text if test_text is not None else ""
-    testo_dom = merged_domain_text if merged_domain_text is not None else ""
+    testo_test = test_text
+    if testo_test is None:
+        testo_test = ""
+
+    testo_dom = merged_domain_text
+    if testo_dom is None:
+        testo_dom = ""
 
     similarity_percent = calculate_text_similarity_percent(testo_test, testo_dom)
 
@@ -321,16 +358,36 @@ def compute_merge_metrics(test_text, merged_domain_text, min_line_len=4, min_blo
     )
 
     total_chars_test = len(testo_test)
-    percent_shared_chars = 0.0
+    total_chars_domain = len(testo_dom)
+
+    percent_shared_chars_on_test = 0.0
     if total_chars_test > 0:
-        percent_shared_chars = (shared_chars_len * 100.0) / float(total_chars_test)
+        percent_shared_chars_on_test = (shared_chars_len * 100.0) / float(total_chars_test)
+
+    percent_shared_chars_on_domain = 0.0
+    if total_chars_domain > 0:
+        percent_shared_chars_on_domain = (shared_chars_len * 100.0) / float(total_chars_domain)
+
+    norm_test = _normalize_for_inclusion(testo_test)
+    norm_dom = _normalize_for_inclusion(testo_dom)
+
+    full_inclusion_flag = False
+    if norm_test != "" and norm_dom != "":
+        if norm_test in norm_dom:
+            full_inclusion_flag = True
+        else:
+            if percent_shared_chars_on_test >= 95.0 and percent_shared_chars_on_domain >= 95.0:
+                full_inclusion_flag = True
 
     risultato["similarity_percent"] = similarity_percent
     risultato["shared_lines_count"] = shared_lines
     risultato["shared_chars_len"] = shared_chars_len
-    risultato["percent_shared_chars_on_test"] = percent_shared_chars
+    risultato["percent_shared_chars_on_test"] = percent_shared_chars_on_test
+    risultato["percent_shared_chars_on_domain"] = percent_shared_chars_on_domain
     risultato["total_lines_test"] = len(set_test)
     risultato["total_chars_test"] = total_chars_test
+    risultato["total_chars_domain"] = total_chars_domain
+    risultato["full_inclusion_flag"] = full_inclusion_flag
 
     return risultato
 
@@ -356,7 +413,6 @@ def analyze_reuse_by_student(tests_dirs, domini_dirs, allowed_extensions, progre
     merged_domain_texts = {}
     metrics_by_student = {}
 
-    # 1) Lettura verifiche locali
     nomi_test = sorted(list(tests_dirs.keys()))
     tot_tests = len(nomi_test)
 
@@ -378,14 +434,12 @@ def analyze_reuse_by_student(tests_dirs, domini_dirs, allowed_extensions, progre
 
         i = i + 1
 
-    # 2) Merge domini (creazione __MERGED__.txt e testi merged)
     merged_domain_texts, _merged_paths = generate_domain_merges(
         domini_dirs,
         allowed_extensions,
         progress_cb,
     )
 
-    # 3) Confronti verifica ↔ dominio merged
     studenti = sorted(
         list(
             set(texts_test.keys()).intersection(
@@ -507,12 +561,11 @@ def show_heatmap(parent, titolo, row_labels, col_labels, matrix):
     top = Toplevel(parent)
     top.title(titolo)
 
-    figure_larghezza = 8.0
-    figure_altezza = 6.0
+    fig_width = 8.0
+    fig_height = 6.0
 
-    fig, ax = plt.subplots(figsize=(figure_larghezza, figure_altezza))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-    # Conversione in float
     dati_numerici = []
     riga_indice = 0
     while riga_indice < len(matrix):
@@ -541,7 +594,7 @@ def show_heatmap(parent, titolo, row_labels, col_labels, matrix):
     )
 
     barra = fig.colorbar(cax)
-    barra.set_label("Similarità (%)")
+    barra.set_label("Similarita (%)")
 
     num_colonne = len(col_labels)
     num_righe = len(row_labels)
@@ -551,17 +604,16 @@ def show_heatmap(parent, titolo, row_labels, col_labels, matrix):
     ax.set_xticklabels(col_labels, rotation=45, ha="right", fontsize=8)
     ax.set_yticklabels(row_labels, fontsize=8)
 
-    ax.set_xlabel("Colonne")
-    ax.set_ylabel("Righe")
+    ax.set_xlabel("Colonna")
+    ax.set_ylabel("Riga")
     ax.set_title(titolo)
 
     fig.tight_layout()
 
     canvas = FigureCanvasTkAgg(fig, master=top)
     canvas.draw()
+    widget = canvas.get_tk_widget()
+    widget.pack(fill="both", expand=True)
 
-    widget_canvas = canvas.get_tk_widget()
-    widget_canvas.pack(fill="both", expand=True)
-
-    # Manteniamo un riferimento per evitare che la figura venga garbage-collected
     top._figure = fig
+    top._canvas = canvas

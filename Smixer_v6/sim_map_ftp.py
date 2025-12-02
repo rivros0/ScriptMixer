@@ -1,228 +1,177 @@
+"""
+sim_map_ftp.py
+
+Gestione della finestra "Mappa similitudini" per i confronti
+VERIFICA ↔ MERGE dominio (FTP).
+
+Tutto il calcolo delle metriche è delegato a similarity_ftp.
+Questo modulo si occupa di:
+
+  - mostrare la tabella riassuntiva per studente;
+  - colorare le righe in base al livello di riuso;
+  - fornire un "report riuso" testuale per ogni studente;
+  - permettere un doppio clic su una riga per aprire le
+    comparazioni avanzate (dettaglio testi).
+"""
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 import similarity_ftp
 
 
+YELLOW_BG = "#85187c"
+
+
+def _build_reuse_report(metrics):
+    """
+    Costruisce un breve report testuale a partire dalle metriche
+    calcolate da similarity_ftp.compute_merge_metrics.
+
+    Metriche utilizzate:
+      - percent_shared_chars_on_test
+      - percent_shared_chars_on_domain
+      - similarity_percent
+      - shared_lines_count
+      - total_lines_test
+      - total_chars_test
+      - full_inclusion_flag
+    """
+    pezzi = []
+
+    if metrics is None:
+        return ""
+
+    percent_on_test = float(metrics.get("percent_shared_chars_on_test", 0.0))
+    percent_on_domain = float(metrics.get("percent_shared_chars_on_domain", 0.0))
+    similarity_percent = float(metrics.get("similarity_percent", 0.0))
+    shared_lines = int(metrics.get("shared_lines_count", 0))
+    total_lines_test = int(metrics.get("total_lines_test", 0))
+    total_chars_test = int(metrics.get("total_chars_test", 0))
+    full_inclusion_flag = bool(metrics.get("full_inclusion_flag", False))
+
+    # ------------------------------------------------------------------
+    # 1) Caso speciale: test integralmente (o quasi) presente nel dominio
+    # ------------------------------------------------------------------
+    if full_inclusion_flag:
+        if percent_on_test >= 80.0 and percent_on_domain >= 80.0:
+            pezzi.append(
+                "Il codice del dominio risulta sostanzialmente coincidente con quello del test: "
+                "il sito sembra contenere principalmente la verifica consegnata."
+            )
+        elif percent_on_test >= 60.0:
+            pezzi.append(
+                "Il codice del test è contenuto quasi integralmente nel dominio, ma rappresenta "
+                "solo una parte del sito, che include anche altro codice."
+            )
+
+    # ------------------------------------------------------------------
+    # 2) Valutazione in base a percentuale di caratteri condivisi sul test
+    # ------------------------------------------------------------------
+    if percent_on_test < 5.0:
+        pezzi.append("Riuso trascurabile (meno del 5% del testo del test).")
+    elif percent_on_test < 15.0:
+        pezzi.append("Riuso lieve (tra 5% e 15% del testo del test).")
+    elif percent_on_test < 30.0:
+        pezzi.append(
+            "Riuso significativo (tra il 15% e il 30% del testo del test): opportuno un controllo puntuale."
+        )
+    elif percent_on_test < 60.0:
+        pezzi.append(
+            "Riuso elevato (tra il 30% e il 60% del testo del test): forte sospetto di copia dal dominio."
+        )
+    else:
+        pezzi.append(
+            "Riuso molto elevato (oltre il 60% del testo del test): verosimile copia quasi integrale dal dominio."
+        )
+
+    # ------------------------------------------------------------------
+    # 3) Contesto basato sulla similarità globale
+    # ------------------------------------------------------------------
+    if similarity_percent < 20.0:
+        pezzi.append("La similarita complessiva tra test e dominio e bassa (meno del 20%).")
+    elif similarity_percent < 40.0:
+        pezzi.append("La similarita complessiva tra test e dominio e moderata (tra 20% e 40%).")
+    elif similarity_percent < 70.0:
+        pezzi.append("La similarita complessiva tra test e dominio e alta (tra 40% e 70%).")
+    else:
+        pezzi.append("La similarita complessiva tra test e dominio e molto alta (oltre il 70%).")
+
+    if percent_on_test >= 30.0 and similarity_percent >= 50.0:
+        pezzi.append(
+            "Percentuale di caratteri condivisi e similarita globale risultano entrambe elevate."
+        )
+
+    # ------------------------------------------------------------------
+    # 4) Analisi delle righe condivise
+    # ------------------------------------------------------------------
+    ratio_righe = 0.0
+    if total_lines_test > 0:
+        ratio_righe = (float(shared_lines) * 100.0) / float(total_lines_test)
+
+    if shared_lines == 0:
+        pezzi.append("Non risultano righe significative in comune.")
+    else:
+        if ratio_righe < 10.0:
+            pezzi.append(
+                "Poche righe significative in comune (meno del 10% delle righe del test)."
+            )
+        elif ratio_righe < 30.0:
+            pezzi.append(
+                "Numero non trascurabile di righe in comune (tra il 10% e il 30% delle righe del test)."
+            )
+        elif ratio_righe < 60.0:
+            pezzi.append(
+                "Molte righe in comune (tra il 30% e il 60% delle righe del test): possibile riuso strutturale del codice."
+            )
+        else:
+            pezzi.append(
+                "La maggior parte delle righe del test coincide con il codice sul dominio (oltre il 60% delle righe)."
+            )
+
+    # ------------------------------------------------------------------
+    # 5) Affidabilita in funzione della dimensione del test
+    # ------------------------------------------------------------------
+    if total_chars_test < 400 or total_lines_test < 15:
+        pezzi.append(
+            "Attenzione: il test e di dimensioni ridotte; le percentuali di riuso potrebbero essere meno significative."
+        )
+
+    report = " ".join(pezzi)
+    return report
+
+
 def open_similarity_map(
     parent_frame,
-    metrics_by_student_cache,
-    texts_test_cache,
-    merged_domain_texts_cache,
-    students_in_test_cache,
-    students_in_domain_cache,
+    metrics_by_student,
+    texts_test,
+    merged_domain_texts,
+    students_in_test,
+    students_in_domain,
 ):
     """
-    Apre la finestra principale "Mappa similitudini (verifica ↔ MERGE dominio)"
-    e gestisce anche l'apertura della finestra di comparazioni avanzate.
+    Apre la finestra con la mappa delle similitudini Test ↔ Dominio.
 
-    I parametri sono i riferimenti alle strutture dati mantenute da frame_domini:
-      - metrics_by_student_cache: dict {studente: metriche_globali}
-      - texts_test_cache: dict {studente: testo_verifica}
-      - merged_domain_texts_cache: dict {studente: testo_merged_dominio}
-      - students_in_test_cache: list degli studenti presenti nei test
-      - students_in_domain_cache: list degli studenti presenti nei domini
+    Parametri:
+      - parent_frame: frame Tkinter padre (frame domini)
+      - metrics_by_student: dict {studente: metriche}
+      - texts_test: dict {studente: testo_verifica}
+      - merged_domain_texts: dict {studente: testo_merge_dominio}
+      - students_in_test: lista studenti presenti nei test
+      - students_in_domain: lista studenti presenti nei domini
     """
-
-    # ------------------------------------------------------------------
-    # Finestra "comparazioni avanzate" (riuso della logica preesistente)
-    # ------------------------------------------------------------------
-    def apri_comparazioni_avanzate(alunno):
-        """
-        Finestra con tre elenchi:
-          - Test ↔ Test
-          - Test ↔ Domini
-          - Dominio ↔ Domini
-        con colorazione blu/arancio/rosso in funzione della similarità.
-        """
-        if len(students_in_test_cache) == 0 and len(students_in_domain_cache) == 0:
-            messagebox.showwarning(
-                "Attenzione",
-                "Esegui prima l'analisi per generare i dati di confronto.",
-            )
-            return
-
-        top = tk.Toplevel(parent_frame)
-        top.title("Comparazioni avanzate per: " + str(alunno))
-
-        nota = tk.Label(
-            top,
-            text=(
-                "Valori in percentuale. Cromia: "
-                "blu=bassa, arancio=media, rosso=alta similarità."
-            ),
-        )
-        nota.grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=6)
-
-        def crea_tv_con_colori(parent, titolo):
-            group = tk.LabelFrame(parent, text=titolo)
-            tv = ttk.Treeview(
-                group,
-                columns=("Confronto", "Similarità %"),
-                show="headings",
-                height=14,
-            )
-
-            tv.heading("Confronto", text="Confronto")
-            tv.heading("Similarità %", text="Similarità %")
-
-            tv.column("Confronto", width=280, anchor="w")
-            tv.column("Similarità %", width=120, anchor="center")
-
-            sb = ttk.Scrollbar(group, orient="vertical", command=tv.yview)
-            tv.configure(yscrollcommand=sb.set)
-
-            tv.grid(row=0, column=0, sticky="nsew")
-            sb.grid(row=0, column=1, sticky="ns")
-
-            group.grid_rowconfigure(0, weight=1)
-            group.grid_columnconfigure(0, weight=1)
-
-            tv.tag_configure("low", foreground="blue")
-            tv.tag_configure("mid", foreground="#cc7a00")
-            tv.tag_configure("high", foreground="red")
-
-            return group, tv
-
-        grp_tvt, tv_tvt = crea_tv_con_colori(
-            top,
-            "Test ↔ Test ({} vs altri test)".format(alunno),
-        )
-        grp_tvt.grid(row=1, column=0, padx=8, pady=8, sticky="nsew")
-
-        grp_tvd, tv_tvd = crea_tv_con_colori(
-            top,
-            "Test ↔ Domini (test di {} vs merge domini)".format(alunno),
-        )
-        grp_tvd.grid(row=1, column=1, padx=8, pady=8, sticky="nsew")
-
-        grp_dvd, tv_dvd = crea_tv_con_colori(
-            top,
-            "Dominio ↔ Domini (merge dominio di {} vs merge domini)".format(alunno),
-        )
-        grp_dvd.grid(row=1, column=2, padx=8, pady=8, sticky="nsew")
-
-        # -------------------------
-        # Test ↔ Test
-        # -------------------------
-        if alunno in texts_test_cache:
-            base_text = texts_test_cache.get(alunno, "")
-            i = 0
-            while i < len(students_in_test_cache):
-                other = students_in_test_cache[i]
-                t_other = texts_test_cache.get(other, "")
-
-                val = similarity_ftp.calculate_text_similarity_percent(
-                    base_text,
-                    t_other,
-                )
-
-                tag = ""
-                if val >= 80.0:
-                    tag = "high"
-                elif val >= 60.0:
-                    tag = "mid"
-                else:
-                    if val <= 30.0:
-                        tag = "low"
-
-                tv_tvt.insert(
-                    "",
-                    "end",
-                    values=(alunno + " ↔ " + other, "{:.1f}".format(val)),
-                    tags=(tag,),
-                )
-                i = i + 1
-        else:
-            tv_tvt.insert("", "end", values=("Nessun test per " + alunno, "-"))
-
-        # -------------------------
-        # Test ↔ Domini
-        # -------------------------
-        if alunno in texts_test_cache:
-            base_text = texts_test_cache.get(alunno, "")
-            i = 0
-            while i < len(students_in_domain_cache):
-                other = students_in_domain_cache[i]
-                d_other = merged_domain_texts_cache.get(other, "")
-
-                val = similarity_ftp.calculate_text_similarity_percent(
-                    base_text,
-                    d_other,
-                )
-
-                tag = ""
-                if val >= 80.0:
-                    tag = "high"
-                elif val >= 60.0:
-                    tag = "mid"
-                else:
-                    if val <= 30.0:
-                        tag = "low"
-
-                tv_tvd.insert(
-                    "",
-                    "end",
-                    values=(alunno + " (test) ↔ " + other + " (dom)", "{:.1f}".format(val)),
-                    tags=(tag,),
-                )
-                i = i + 1
-        else:
-            tv_tvd.insert("", "end", values=("Nessun test per " + alunno, "-"))
-
-        # -------------------------
-        # Dominio ↔ Domini
-        # -------------------------
-        if alunno in merged_domain_texts_cache:
-            base_dom = merged_domain_texts_cache.get(alunno, "")
-            i = 0
-            while i < len(students_in_domain_cache):
-                other = students_in_domain_cache[i]
-                d_other = merged_domain_texts_cache.get(other, "")
-
-                val = similarity_ftp.calculate_text_similarity_percent(
-                    base_dom,
-                    d_other,
-                )
-
-                tag = ""
-                if val >= 80.0:
-                    tag = "high"
-                elif val >= 60.0:
-                    tag = "mid"
-                else:
-                    if val <= 30.0:
-                        tag = "low"
-
-                tv_dvd.insert(
-                    "",
-                    "end",
-                    values=(alunno + " (dom) ↔ " + other + " (dom)", "{:.1f}".format(val)),
-                    tags=(tag,),
-                )
-                i = i + 1
-        else:
-            tv_dvd.insert("", "end", values=("Nessun dominio per " + alunno, "-"))
-
-        top.grid_rowconfigure(1, weight=1)
-        top.grid_columnconfigure(0, weight=1)
-        top.grid_columnconfigure(1, weight=1)
-        top.grid_columnconfigure(2, weight=1)
-
-    # ------------------------------------------------------------------
-    # Finestra "mappa similitudini" (riepilogo globale per studente)
-    # ------------------------------------------------------------------
-    if len(metrics_by_student_cache) == 0:
-        messagebox.showinfo(
-            "Informazione",
-            "Non ci sono risultati da visualizzare. Esegui prima l'analisi.",
+    if not metrics_by_student:
+        messagebox.showwarning(
+            "Attenzione",
+            "Nessuna analisi disponibile. Esegui prima 'Analizza somiglianze'.",
         )
         return
 
-    top_mappa = tk.Toplevel(parent_frame)
-    top_mappa.title("Riepilogo similitudini (verifica ↔ MERGE dominio)")
+    top = tk.Toplevel(parent_frame)
+    top.title("Riepilogo similitudini (verifica ↔ MERGE dominio)")
+    top.configure(bg="white")
 
-    cols = (
+    colonne = (
         "Studente",
         "Simil. Test/Dominio (%)",
         "Righe riutilizzate",
@@ -230,90 +179,166 @@ def open_similarity_map(
         "% char su test",
         "Righe test",
         "Caratteri test",
+        "Report riuso",
     )
 
-    tv = ttk.Treeview(top_mappa, columns=cols, show="headings", height=20)
+    tree = ttk.Treeview(
+        top,
+        columns=colonne,
+        show="headings",
+        height=18,
+    )
 
-    i = 0
-    while i < len(cols):
-        c = cols[i]
-        tv.heading(c, text=c)
+    indice = 0
+    while indice < len(colonne):
+        col = colonne[indice]
+        tree.heading(col, text=col)
 
-        if c == "Studente":
-            tv.column(c, width=200, anchor="w")
+        if col == "Studente":
+            tree.column(col, width=200, anchor="w")
+        elif col == "Report riuso":
+            tree.column(col, width=600, anchor="w")
         else:
-            tv.column(c, width=160, anchor="center")
+            tree.column(col, width=130, anchor="center")
 
-        i = i + 1
+        indice = indice + 1
 
-    sb = ttk.Scrollbar(top_mappa, orient="vertical", command=tv.yview)
-    tv.configure(yscrollcommand=sb.set)
+    tree.grid(row=0, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
 
-    tv.grid(row=0, column=0, sticky="nsew")
-    sb.grid(row=0, column=1, sticky="ns")
+    scrollbar_vert = ttk.Scrollbar(
+        top,
+        orient="vertical",
+        command=tree.yview,
+    )
+    tree.configure(yscrollcommand=scrollbar_vert.set)
+    scrollbar_vert.grid(row=0, column=3, sticky="ns", pady=10)
 
-    tv.tag_configure("low", foreground="blue")
-    tv.tag_configure("mid", foreground="#cc7a00")
-    tv.tag_configure("high", foreground="red")
+    top.grid_rowconfigure(0, weight=1)
+    top.grid_columnconfigure(0, weight=1)
 
-    nomi = sorted(list(metrics_by_student_cache.keys()))
+    tree.tag_configure("low", foreground="blue")
+    tree.tag_configure("mid", foreground="orange")
+    tree.tag_configure("high", foreground="red")
 
-    i = 0
-    while i < len(nomi):
-        nome = nomi[i]
-        m = metrics_by_student_cache[nome]
+    studenti = sorted(metrics_by_student.keys())
 
-        sim_globale = float(m.get("similarity_percent", 0.0))
-        shared_lines = int(m.get("shared_lines_count", 0))
-        shared_chars = int(m.get("shared_chars_len", 0))
-        perc_shared_chars = float(m.get("percent_shared_chars_on_test", 0.0))
-        total_lines_test = int(m.get("total_lines_test", 0))
-        total_chars_test = int(m.get("total_chars_test", 0))
+    indice = 0
+    while indice < len(studenti):
+        studente = studenti[indice]
+        m = metrics_by_student[studente]
 
-        tag = ""
-        if sim_globale >= 80.0 or perc_shared_chars >= 80.0:
-            tag = "high"
-        elif sim_globale >= 60.0 or perc_shared_chars >= 60.0:
-            tag = "mid"
-        else:
-            if sim_globale <= 30.0 and perc_shared_chars <= 30.0:
-                tag = "low"
+        simil = float(m.get("similarity_percent", 0.0))
+        righe_comuni = int(m.get("shared_lines_count", 0))
+        chars_comuni = int(m.get("shared_chars_len", 0))
+        perc_chars_test = float(m.get("percent_shared_chars_on_test", 0.0))
+        righe_test = int(m.get("total_lines_test", 0))
+        chars_test = int(m.get("total_chars_test", 0))
 
-        values = (
-            nome,
-            "{:.1f}".format(sim_globale),
-            str(shared_lines),
-            str(shared_chars),
-            "{:.1f}".format(perc_shared_chars),
-            str(total_lines_test),
-            str(total_chars_test),
+        report = _build_reuse_report(m)
+
+        valori = (
+            studente,
+            "{:.1f}".format(simil),
+            str(righe_comuni),
+            str(chars_comuni),
+            "{:.1f}".format(perc_chars_test),
+            str(righe_test),
+            str(chars_test),
+            report,
         )
 
-        tv.insert("", "end", values=values, tags=(tag,))
-        i = i + 1
+        if perc_chars_test < 15.0:
+            tag = "low"
+        elif perc_chars_test < 40.0:
+            tag = "mid"
+        else:
+            tag = "high"
 
-    def on_double_click(event):
-        item_id = tv.identify_row(event.y)
-        if item_id == "":
-            return
-        vals = tv.item(item_id, "values")
-        if not vals:
-            return
-        selected = vals[0]
-        apri_comparazioni_avanzate(selected)
+        tree.insert("", "end", values=valori, tags=(tag,))
 
-    tv.bind("<Double-1>", on_double_click)
+        indice = indice + 1
 
-    legenda = tk.Label(
-        top_mappa,
-        text=(
-            "Legenda: blu = bassa similarità, arancio = media, rosso = alta. "
-            "Doppio clic su uno studente per aprire le comparazioni avanzate."
-        ),
-        justify="left",
-        anchor="w",
+    legenda = (
+        "Legenda: blu = bassa similarita, arancio = media, rosso = alta. "
+        "Doppio clic su uno studente per aprire le comparazioni avanzate."
     )
-    legenda.grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=6)
 
-    top_mappa.grid_rowconfigure(0, weight=1)
-    top_mappa.grid_columnconfigure(0, weight=1)
+    lbl_legenda = tk.Label(
+        top,
+        text=legenda,
+        anchor="w",
+        justify="left",
+        bg="white",
+    )
+    lbl_legenda.grid(row=1, column=0, columnspan=3, padx=10, pady=(0, 8), sticky="we")
+
+    def apri_comparazioni_avanzate(evento):
+        """
+        Su doppio clic apre una finestra con i due testi a confronto
+        (test e merge dominio) per lo studente selezionato.
+        """
+        item_id = tree.focus()
+        if not item_id:
+            return
+
+        valori = tree.item(item_id, "values")
+        if not valori:
+            return
+
+        studente = valori[0]
+
+        testo_test = texts_test.get(studente, "")
+        testo_dom = merged_domain_texts.get(studente, "")
+
+        if testo_test == "" and testo_dom == "":
+            messagebox.showinfo(
+                "Informazione",
+                "Non sono disponibili testi per lo studente selezionato.",
+            )
+            return
+
+        win = tk.Toplevel(top)
+        win.title("Dettaglio similitudini per: " + studente)
+        win.geometry("1200x700")
+
+        frame_sx = tk.Frame(win)
+        frame_dx = tk.Frame(win)
+
+        frame_sx.pack(side="left", fill="both", expand=True)
+        frame_dx.pack(side="right", fill="both", expand=True)
+
+        lbl_sx = tk.Label(frame_sx, text="TEST locale", anchor="w")
+        lbl_sx.pack(fill="x")
+
+        txt_sx = tk.Text(frame_sx, wrap="none")
+        txt_sx.pack(fill="both", expand=True)
+
+        scroll_y_sx = tk.Scrollbar(frame_sx, orient="vertical", command=txt_sx.yview)
+        scroll_y_sx.pack(side="right", fill="y")
+        txt_sx.configure(yscrollcommand=scroll_y_sx.set)
+
+        scroll_x_sx = tk.Scrollbar(frame_sx, orient="horizontal", command=txt_sx.xview)
+        scroll_x_sx.pack(side="bottom", fill="x")
+        txt_sx.configure(xscrollcommand=scroll_x_sx.set)
+
+        lbl_dx = tk.Label(frame_dx, text="MERGE dominio", anchor="w")
+        lbl_dx.pack(fill="x")
+
+        txt_dx = tk.Text(frame_dx, wrap="none")
+        txt_dx.pack(fill="both", expand=True)
+
+        scroll_y_dx = tk.Scrollbar(frame_dx, orient="vertical", command=txt_dx.yview)
+        scroll_y_dx.pack(side="right", fill="y")
+        txt_dx.configure(yscrollcommand=scroll_y_dx.set)
+
+        scroll_x_dx = tk.Scrollbar(frame_dx, orient="horizontal", command=txt_dx.xview)
+        scroll_x_dx.pack(side="bottom", fill="x")
+        txt_dx.configure(xscrollcommand=scroll_x_dx.set)
+
+        txt_sx.insert("1.0", testo_test)
+        txt_dx.insert("1.0", testo_dom)
+
+        txt_sx.config(state="disabled")
+        txt_dx.config(state="disabled")
+
+    tree.bind("<Double-1>", apri_comparazioni_avanzate)

@@ -19,7 +19,7 @@ from frame_associa import open_associa_window
 # =========================
 
 root = tk.Tk()
-root.title("SMX V085 / Gestione Elaborati")
+root.title("SMX V086 / Gestione Elaborati")
 root.geometry("1280x800")
 
 # Icona (se presente)
