@@ -62,6 +62,25 @@ def create_frame_correzione(root, global_config):
     entry_prompt = tk.Text(frame_correzione, width=80, height=3)
     entry_prompt.grid(row=1, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
+    # Registro il widget dell'INTRO nella configurazione globale
+    # in modo da poterlo aggiornare quando viene caricata una configurazione.
+    global_config["intro_widget"] = entry_prompt
+
+    # Se è già presente un testo di INTRO nella configurazione,
+    # lo visualizzo nel widget Text.
+    try:
+        if "intro_text" in global_config:
+            intro_value = global_config["intro_text"].get()
+            if intro_value is not None:
+                if intro_value != "":
+                    entry_prompt.delete("1.0", "end")
+                    entry_prompt.insert("1.0", intro_value)
+    except Exception:
+        # Non blocco la creazione della frame per un eventuale errore
+        # (ad esempio se intro_text non è una StringVar).
+        pass
+
+
     # ======================================================================
     # RIGA 2: CHECKBOX + PULSANTE MIX
     # ======================================================================
@@ -321,6 +340,27 @@ def create_frame_correzione(root, global_config):
     # PULSANTE MIX (usa la directory globale)
     # ======================================================================
     def do_mix():
+        """
+        Esegue il mix dei file nella directory selezionata.
+
+        Prima di procedere:
+          - legge il testo dell'INTRO dal widget Text;
+          - aggiorna la variabile globale intro_text, così che
+            possa essere salvata nel file di configurazione JSON.
+        """
+        try:
+            intro_corrente = entry_prompt.get("1.0", "end").strip()
+        except Exception:
+            intro_corrente = ""
+
+        if "intro_text" in global_config:
+            try:
+                global_config["intro_text"].set(intro_corrente)
+            except Exception:
+                # Se per qualche motivo intro_text non è una StringVar,
+                # mantengo comunque un riferimento al testo.
+                global_config["intro_text"] = intro_corrente
+
         business_logic.mix_files(
             global_config["selected_directory"],  # StringVar, gestita da business_logic._resolve_base_directory
             entry_prompt,
@@ -332,6 +372,7 @@ def create_frame_correzione(root, global_config):
         )
 
     btn_mix.config(command=do_mix)
+
 
     # ======================================================================
     # MESSAGGIO INIZIALE

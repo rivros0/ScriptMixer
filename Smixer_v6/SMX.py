@@ -58,6 +58,10 @@ global_config = {
     "refresh_export": None,
     "refresh_domini": None,
 
+    # Testo dell'introduzione per i file di mix
+    # Verrà salvato e ricaricato nel file di configurazione JSON
+    "intro_text": tk.StringVar(),
+
     # eventuali credenziali Dominii/FTP (se frame_domini le inserisce qui)
     # Esempi:
     # "dom_host": tk.StringVar(),
@@ -152,6 +156,12 @@ def salva_configurazione():
         "current_mode": current_mode.get(),
         "domains_csv_path": global_config["domains_csv_path"].get(),
     }
+    
+        # Salvataggio del testo di INTRO, se la variabile è presente
+    if "intro_text" in global_config:
+        config["intro_text"] = global_config["intro_text"].get()
+    else:
+        config["intro_text"] = ""
 
     # Persistenza credenziali, se presenti
     for key in ("dom_host", "dom_user", "dom_pass", "dom_port", "dom_tls"):
@@ -239,6 +249,27 @@ def carica_configurazione():
         global_config["domains_csv_path"].set(
             config.get("domains_csv_path", "")
         )
+
+        # Ripristino del testo di INTRO, se presente nel file di configurazione
+        if "intro_text" in global_config:
+            intro_from_config = config.get("intro_text", "")
+            global_config["intro_text"].set(intro_from_config)
+
+        # Se l'oggetto Text della frame correzione è già stato registrato,
+        # aggiorno anche il contenuto visualizzato.
+            if "intro_widget" in global_config:
+                intro_widget = global_config["intro_widget"]
+                try:
+                    if intro_widget is not None:
+                        intro_widget.delete("1.0", "end")
+                        if intro_from_config is not None:
+                            if intro_from_config != "":
+                                intro_widget.insert("1.0", intro_from_config)
+                except Exception:
+                    # Non voglio bloccare il caricamento della configurazione
+                    # per un eventuale errore sulla Text.
+                    pass
+
 
         mode_val = config.get("current_mode", "Preparazione")
         if mode_val not in ("Preparazione", "Live", "Correzione", "Export", "Domini"):

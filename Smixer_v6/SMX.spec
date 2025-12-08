@@ -30,7 +30,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='SMX v085',               # nome eseguibile
+    name='SMX v087',               # nome eseguibile
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
